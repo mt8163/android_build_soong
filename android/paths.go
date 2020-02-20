@@ -829,7 +829,7 @@ func PathForSourceRelaxed(ctx PathContext, pathComponents ...string) SourcePath 
 		if !exists {
 			modCtx.AddMissingDependencies([]string{path.String()})
 		}
-	} else if exists, _, err := ctx.Fs().Exists(path.String()); err != nil {
+	} else if exists, _, err := ctx.Config().fs.Exists(path.String()); err != nil {
 		reportPathErrorf(ctx, "%s: %s", path, err.Error())
 	} else if !exists {
 		reportPathErrorf(ctx, "source path %s does not exist", path)
