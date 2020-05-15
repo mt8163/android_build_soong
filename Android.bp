@@ -40,7 +40,7 @@ bootstrap_go_package {
         "soong-env",
         "soong-shared",
         "soong-ui-metrics_proto",
-        "soong-aosp",
+        "soong-lineage",
     ],
     srcs: [
         "android/androidmk.go",

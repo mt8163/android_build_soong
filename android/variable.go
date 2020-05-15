@@ -20,7 +20,7 @@ import (
 	"runtime"
 	"strings"
 
-	"aosp/soong/android"
+	"lineage/soong/android"
 
 	"github.com/google/blueprint/proptools"
 )
@@ -85,6 +85,7 @@ type variableProperties struct {
 			Host_required   []string
 			Target_required []string
 		}
+		
 
 		// eng is true for -eng builds, and can be used to turn on additionaly heavyweight debugging
 		// features.
@@ -134,8 +135,14 @@ type variableProperties struct {
 			Exclude_srcs []string `android:"arch_variant"`
 		} `android:"arch_variant"`
 
-		// include Aosp variables
-		Aosp android.Product_variables
+	Target_shim_libs struct {
+		Cppflags []string
+	}
+
+
+	// include Lineage variables
+	Lineage android.Product_variables
+
 	} `android:"arch_variant"`
 }
 
@@ -334,8 +341,10 @@ type productVariables struct {
 
 	BoardUsesRecoveryAsBoot *bool `json:",omitempty"`
 
-	// include Aosp variables
-	Aosp android.ProductVariables
+	Target_shim_libs  *string `json:",omitempty"`
+	
+	// include Lineage variables
+	Lineage android.ProductVariables
 }
 
 func boolPtr(v bool) *bool {
