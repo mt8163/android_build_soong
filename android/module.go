@@ -19,6 +19,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"text/scanner"
 
@@ -128,6 +129,20 @@ type BaseModuleContext interface {
 	// and returns a top-down dependency path from a start module to current child module.
 	GetWalkPath() []Module
 
+	// GetTagPath is supposed to be called in visit function passed in WalkDeps()
+	// and returns a top-down dependency tags path from a start module to current child module.
+	// It has one less entry than GetWalkPath() as it contains the dependency tags that
+	// exist between each adjacent pair of modules in the GetWalkPath().
+	// GetTagPath()[i] is the tag between GetWalkPath()[i] and GetWalkPath()[i+1]
+	GetTagPath() []blueprint.DependencyTag
+
+	// GetPathString is supposed to be called in visit function passed in WalkDeps()
+	// and returns a multi-line string showing the modules and dependency tags
+	// among them along the top-down dependency path from a start module to current child module.
+	// skipFirst when set to true, the output doesn't include the start module,
+	// which is already printed when this function is used along with ModuleErrorf().
+	GetPathString(skipFirst bool) string
+
 	AddMissingDependencies(missingDeps []string)
 
 	Target() Target
@@ -220,6 +235,7 @@ type Module interface {
 	InstallBypassMake() bool
 	InstallForceOS() *OsType
 	SkipInstall()
+	IsSkipInstall() bool
 	ExportedToMake() bool
 	InitRc() Paths
 	VintfFragments() Paths
@@ -240,9 +256,6 @@ type Module interface {
 
 	// Get information about the properties that can contain visibility rules.
 	visibilityProperties() []visibilityProperty
-
-	// Get the visibility rules that control the visibility of this module.
-	visibility() []string
 
 	RequiredModuleNames() []string
 	HostRequiredModuleNames() []string
@@ -315,6 +328,8 @@ type commonProperties struct {
 	//  ["//visibility:public"]: Anyone can use this module.
 	//  ["//visibility:private"]: Only rules in the module's package (not its subpackages) can use
 	//      this module.
+	//  ["//visibility:override"]: Discards any rules inherited from defaults or a creating module.
+	//      Can only be used at the beginning of a list of visibility rules.
 	//  ["//some/package:__pkg__", "//other/package:__pkg__"]: Only modules in some/package and
 	//      other/package (defined in some/package/*.bp and other/package/*.bp) have access to
 	//      this module. Note that sub-packages do not have access to the rule; for example,
@@ -603,10 +618,8 @@ func InitAndroidModule(m Module) {
 	base.customizableProperties = m.GetProperties()
 
 	// The default_visibility property needs to be checked and parsed by the visibility module during
-	// its checking and parsing phases.
-	base.primaryVisibilityProperty =
-		newVisibilityProperty("visibility", &base.commonProperties.Visibility)
-	base.visibilityPropertyInfo = []visibilityProperty{base.primaryVisibilityProperty}
+	// its checking and parsing phases so make it the primary visibility property.
+	setPrimaryVisibilityProperty(m, "visibility", &base.commonProperties.Visibility)
 }
 
 func InitAndroidArchModule(m Module, hod HostOrDeviceSupported, defaultMultilib Multilib) {
@@ -793,15 +806,6 @@ func (m *ModuleBase) visibilityProperties() []visibilityProperty {
 	return m.visibilityPropertyInfo
 }
 
-func (m *ModuleBase) visibility() []string {
-	// The soong_namespace module does not initialize the primaryVisibilityProperty.
-	if m.primaryVisibilityProperty != nil {
-		return m.primaryVisibilityProperty.getStrings()
-	} else {
-		return nil
-	}
-}
-
 func (m *ModuleBase) Target() Target {
 	return m.commonProperties.CompileTarget
 }
@@ -894,6 +898,47 @@ func (m *ModuleBase) SystemExtSpecific() bool {
 	return Bool(m.commonProperties.System_ext_specific)
 }
 
+// RequiresStableAPIs returns true if the module will be installed to a partition that may
+// be updated separately from the system image.
+func (m *ModuleBase) RequiresStableAPIs(ctx BaseModuleContext) bool {
+	return m.SocSpecific() || m.DeviceSpecific() ||
+		(m.ProductSpecific() && ctx.Config().EnforceProductPartitionInterface())
+}
+
+func (m *ModuleBase) PartitionTag(config DeviceConfig) string {
+	partition := "system"
+	if m.SocSpecific() {
+		// A SoC-specific module could be on the vendor partition at
+		// "vendor" or the system partition at "system/vendor".
+		if config.VendorPath() == "vendor" {
+			partition = "vendor"
+		}
+	} else if m.DeviceSpecific() {
+		// A device-specific module could be on the odm partition at
+		// "odm", the vendor partition at "vendor/odm", or the system
+		// partition at "system/vendor/odm".
+		if config.OdmPath() == "odm" {
+			partition = "odm"
+		} else if strings.HasPrefix(config.OdmPath(), "vendor/") {
+			partition = "vendor"
+		}
+	} else if m.ProductSpecific() {
+		// A product-specific module could be on the product partition
+		// at "product" or the system partition at "system/product".
+		if config.ProductPath() == "product" {
+			partition = "product"
+		}
+	} else if m.SystemExtSpecific() {
+		// A system_ext-specific module could be on the system_ext
+		// partition at "system_ext" or the system partition at
+		// "system/system_ext".
+		if config.SystemExtPath() == "system_ext" {
+			partition = "system_ext"
+		}
+	}
+	return partition
+}
+
 func (m *ModuleBase) Enabled() bool {
 	if m.commonProperties.Enabled == nil {
 		return !m.Os().DefaultDisabled
@@ -907,6 +952,10 @@ func (m *ModuleBase) Disable() {
 
 func (m *ModuleBase) SkipInstall() {
 	m.commonProperties.SkipInstall = true
+}
+
+func (m *ModuleBase) IsSkipInstall() bool {
+	return m.commonProperties.SkipInstall == true
 }
 
 func (m *ModuleBase) ExportedToMake() bool {
@@ -983,6 +1032,16 @@ func (m *ModuleBase) ImageVariation() blueprint.Variation {
 		Mutator:   "image",
 		Variation: m.base().commonProperties.ImageVariation,
 	}
+}
+
+func (m *ModuleBase) getVariationByMutatorName(mutator string) string {
+	for i, v := range m.commonProperties.DebugMutators {
+		if v == mutator {
+			return m.commonProperties.DebugVariations[i]
+		}
+	}
+
+	return ""
 }
 
 func (m *ModuleBase) InRamdisk() bool {
@@ -1356,6 +1415,7 @@ type baseModuleContext struct {
 	debug         bool
 
 	walkPath []Module
+	tagPath  []blueprint.DependencyTag
 
 	strictVisitDeps bool // If true, enforce that all dependencies are enabled
 }
@@ -1462,10 +1522,17 @@ func (m *moduleContext) Variable(pctx PackageContext, name, value string) {
 func (m *moduleContext) Rule(pctx PackageContext, name string, params blueprint.RuleParams,
 	argNames ...string) blueprint.Rule {
 
-	if m.config.UseRemoteBuild() && params.Pool == nil {
-		// When USE_GOMA=true or USE_RBE=true are set and the rule is not supported by goma/RBE, restrict
-		// jobs to the local parallelism value
-		params.Pool = localPool
+	if m.config.UseRemoteBuild() {
+		if params.Pool == nil {
+			// When USE_GOMA=true or USE_RBE=true are set and the rule is not supported by goma/RBE, restrict
+			// jobs to the local parallelism value
+			params.Pool = localPool
+		} else if params.Pool == remotePool {
+			// remotePool is a fake pool used to identify rule that are supported for remoting. If the rule's
+			// pool is the remotePool, replace with nil so that ninja runs it at NINJA_REMOTE_NUM_JOBS
+			// parallelism.
+			params.Pool = nil
+		}
 	}
 
 	rule := m.bp.Rule(pctx.PackageContext, name, params, argNames...)
@@ -1645,6 +1712,7 @@ func (b *baseModuleContext) WalkDepsBlueprint(visit func(blueprint.Module, bluep
 
 func (b *baseModuleContext) WalkDeps(visit func(Module, Module) bool) {
 	b.walkPath = []Module{b.Module()}
+	b.tagPath = []blueprint.DependencyTag{}
 	b.bp.WalkDeps(func(child, parent blueprint.Module) bool {
 		childAndroidModule, _ := child.(Module)
 		parentAndroidModule, _ := parent.(Module)
@@ -1652,8 +1720,10 @@ func (b *baseModuleContext) WalkDeps(visit func(Module, Module) bool) {
 			// record walkPath before visit
 			for b.walkPath[len(b.walkPath)-1] != parentAndroidModule {
 				b.walkPath = b.walkPath[0 : len(b.walkPath)-1]
+				b.tagPath = b.tagPath[0 : len(b.tagPath)-1]
 			}
 			b.walkPath = append(b.walkPath, childAndroidModule)
+			b.tagPath = append(b.tagPath, b.OtherModuleDependencyTag(childAndroidModule))
 			return visit(childAndroidModule, parentAndroidModule)
 		} else {
 			return false
@@ -1663,6 +1733,45 @@ func (b *baseModuleContext) WalkDeps(visit func(Module, Module) bool) {
 
 func (b *baseModuleContext) GetWalkPath() []Module {
 	return b.walkPath
+}
+
+func (b *baseModuleContext) GetTagPath() []blueprint.DependencyTag {
+	return b.tagPath
+}
+
+// A regexp for removing boilerplate from BaseDependencyTag from the string representation of
+// a dependency tag.
+var tagCleaner = regexp.MustCompile(`\QBaseDependencyTag:blueprint.BaseDependencyTag{}\E(, )?`)
+
+// PrettyPrintTag returns string representation of the tag, but prefers
+// custom String() method if available.
+func PrettyPrintTag(tag blueprint.DependencyTag) string {
+	// Use tag's custom String() method if available.
+	if stringer, ok := tag.(fmt.Stringer); ok {
+		return stringer.String()
+	}
+
+	// Otherwise, get a default string representation of the tag's struct.
+	tagString := fmt.Sprintf("%#v", tag)
+
+	// Remove the boilerplate from BaseDependencyTag as it adds no value.
+	tagString = tagCleaner.ReplaceAllString(tagString, "")
+	return tagString
+}
+
+func (b *baseModuleContext) GetPathString(skipFirst bool) string {
+	sb := strings.Builder{}
+	tagPath := b.GetTagPath()
+	walkPath := b.GetWalkPath()
+	if !skipFirst {
+		sb.WriteString(walkPath[0].String())
+	}
+	for i, m := range walkPath[1:] {
+		sb.WriteString("\n")
+		sb.WriteString(fmt.Sprintf("           via tag %s\n", PrettyPrintTag(tagPath[i])))
+		sb.WriteString(fmt.Sprintf("    -> %s", m.String()))
+	}
+	return sb.String()
 }
 
 func (m *moduleContext) VisitAllModuleVariants(visit func(Module)) {

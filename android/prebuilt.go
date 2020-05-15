@@ -39,6 +39,12 @@ var PrebuiltDepTag prebuiltDependencyTag
 // Mark this tag so dependencies that use it are excluded from visibility enforcement.
 func (t prebuiltDependencyTag) ExcludeFromVisibilityEnforcement() {}
 
+// Mark this tag so dependencies that use it are excluded from APEX contents.
+func (t prebuiltDependencyTag) ExcludeFromApexContents() {}
+
+var _ ExcludeFromVisibilityEnforcementTag = PrebuiltDepTag
+var _ ExcludeFromApexContentsTag = PrebuiltDepTag
+
 type PrebuiltProperties struct {
 	// When prefer is set to true the prebuilt will be used instead of any source module with
 	// a matching name.
@@ -61,6 +67,10 @@ func (p *Prebuilt) Name(name string) string {
 
 func (p *Prebuilt) ForcePrefer() {
 	p.properties.Prefer = proptools.BoolPtr(true)
+}
+
+func (p *Prebuilt) Prefer() bool {
+	return proptools.Bool(p.properties.Prefer)
 }
 
 // The below source-related functions and the srcs, src fields are based on an assumption that

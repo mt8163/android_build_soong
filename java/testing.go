@@ -50,6 +50,8 @@ func TestConfig(buildDir string, env map[string]string, bp string, fs map[string
 		"api/test-current.txt":   nil,
 		"api/test-removed.txt":   nil,
 		"framework/aidl/a.aidl":  nil,
+		"aidl/foo/IFoo.aidl":     nil,
+		"aidl/bar/IBar.aidl":     nil,
 		"assets_a/a":             nil,
 		"assets_b/b":             nil,
 
@@ -114,6 +116,7 @@ func TestConfig(buildDir string, env map[string]string, bp string, fs map[string
 
 		"cert/new_cert.x509.pem": nil,
 		"cert/new_cert.pk8":      nil,
+		"lineage.bin":            nil,
 
 		"testdata/data": nil,
 
@@ -148,7 +151,7 @@ func GatherRequiredDepsForTest() string {
 		"android_system_stubs_current",
 		"android_test_stubs_current",
 		"android_module_lib_stubs_current",
-		"services-stubs",
+		"android_system_server_stubs_current",
 		"core.current.stubs",
 		"core.platform.api.stubs",
 		"kotlin-stdlib",

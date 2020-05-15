@@ -52,10 +52,15 @@ type sdk struct {
 
 	// Information about the OsType specific member variants associated with this variant.
 	//
-	// Set by OsType specific variants when their GenerateAndroidBuildActions is invoked
-	// and used by the CommonOS variant when its GenerateAndroidBuildActions is invoked, which
-	// is guaranteed to occur afterwards.
+	// Set by OsType specific variants in the collectMembers() method and used by the
+	// CommonOS variant when building the snapshot. That work is all done on separate
+	// calls to the sdk.GenerateAndroidBuildActions method which is guaranteed to be
+	// called for the OsType specific variants before the CommonOS variant (because
+	// the latter depends on the former).
 	memberRefs []sdkMemberRef
+
+	// The multilib variants that are used by this sdk variant.
+	multilibUsages multilibUsage
 
 	properties sdkProperties
 
@@ -259,8 +264,8 @@ func (s *sdk) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	// This method is guaranteed to be called on OsType specific variants before it is called
 	// on their corresponding CommonOS variant.
 	if !s.IsCommonOSVariant() {
-		// Collect the OsType specific members are add them to the OsType specific variant.
-		s.memberRefs = s.collectMembers(ctx)
+		// Update the OsType specific sdk variant with information about its members.
+		s.collectMembers(ctx)
 	} else {
 		// Get the OsType specific variants on which the CommonOS depends.
 		osSpecificVariants := android.GetOsSpecificVariantsOfCommonOSVariant(ctx)
@@ -307,7 +312,7 @@ func RegisterPreDepsMutators(ctx android.RegisterMutatorsContext) {
 	ctx.BottomUp("SdkMemberInterVersion", memberInterVersionMutator).Parallel()
 }
 
-// RegisterPostDepshMutators registers post-deps mutators to support modules implementing SdkAware
+// RegisterPostDepsMutators registers post-deps mutators to support modules implementing SdkAware
 // interface and the sdk module type. This function has been made public to be called by tests
 // outside of the sdk package
 func RegisterPostDepsMutators(ctx android.RegisterMutatorsContext) {
@@ -426,23 +431,31 @@ func sdkDepsReplaceMutator(mctx android.BottomUpMutatorContext) {
 	}
 }
 
-// Step 6: ensure that the dependencies from outside of the APEX are all from the required SDKs
+// Step 6: ensure that the dependencies outside of the APEX are all from the required SDKs
 func sdkRequirementsMutator(mctx android.TopDownMutatorContext) {
 	if m, ok := mctx.Module().(interface {
-		DepIsInSameApex(ctx android.BaseModuleContext, dep android.Module) bool
-		RequiredSdks() android.SdkRefs
+		android.DepIsInSameApex
+		android.RequiredSdks
 	}); ok {
 		requiredSdks := m.RequiredSdks()
 		if len(requiredSdks) == 0 {
 			return
 		}
 		mctx.VisitDirectDeps(func(dep android.Module) {
-			if mctx.OtherModuleDependencyTag(dep) == android.DefaultsDepTag {
+			tag := mctx.OtherModuleDependencyTag(dep)
+			if tag == android.DefaultsDepTag {
 				// dependency to defaults is always okay
 				return
 			}
 
-			// If the dep is from outside of the APEX, but is not in any of the
+			// Ignore the dependency from the unversioned member to any versioned members as an
+			// apex that depends on the unversioned member will not also be depending on a versioned
+			// member.
+			if _, ok := tag.(sdkMemberVersionedDepTag); ok {
+				return
+			}
+
+			// If the dep is outside of the APEX, but is not in any of the
 			// required SDKs, we know that the dep is a violation.
 			if sa, ok := dep.(android.SdkAware); ok {
 				if !m.DepIsInSameApex(mctx, dep) && !requiredSdks.Contains(sa.ContainingSdk()) {

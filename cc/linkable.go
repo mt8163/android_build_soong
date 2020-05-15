@@ -12,6 +12,7 @@ type LinkableInterface interface {
 	CcLibraryInterface() bool
 
 	OutputFile() android.OptionalPath
+	CoverageFiles() android.Paths
 
 	IncludeDirs() android.Paths
 	SetDepsInLinkOrder([]android.Path)
@@ -39,18 +40,22 @@ type LinkableInterface interface {
 	Shared() bool
 	Toc() android.OptionalPath
 
+	Host() bool
+
 	InRamdisk() bool
 	OnlyInRamdisk() bool
 
 	InRecovery() bool
 	OnlyInRecovery() bool
 
+	UseSdk() bool
 	UseVndk() bool
 	MustUseVendorVariant() bool
 	IsVndk() bool
 	HasVendorVariant() bool
 
 	SdkVersion() string
+	AlwaysSdk() bool
 
 	ToolchainLibrary() bool
 	NdkPrebuiltStl() bool
@@ -79,4 +84,5 @@ var (
 
 	CrtBeginDepTag = DependencyTag{Name: "crtbegin"}
 	CrtEndDepTag   = DependencyTag{Name: "crtend"}
+	CoverageDepTag = DependencyTag{Name: "coverage"}
 )

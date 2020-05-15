@@ -517,6 +517,9 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 				ctx.Fatalln("Unknown option:", arg)
 			}
 		} else if k, v, ok := decodeKeyValue(arg); ok && len(k) > 0 {
+			if k == "OUT_DIR" {
+				ctx.Fatalln("OUT_DIR may only be set in the environment, not as a command line option.")
+			}
 			c.environ.Set(k, v)
 		} else if arg == "dist" {
 			c.dist = true
@@ -775,48 +778,6 @@ func (c *configImpl) StartGoma() bool {
 
 func (c *configImpl) UseRBE() bool {
 	if v, ok := c.environ.Get("USE_RBE"); ok {
-		v = strings.TrimSpace(v)
-		if v != "" && v != "false" {
-			return true
-		}
-	}
-	return false
-}
-
-func (c *configImpl) UseRBEJAVAC() bool {
-	if !c.UseRBE() {
-		return false
-	}
-
-	if v, ok := c.environ.Get("RBE_JAVAC"); ok {
-		v = strings.TrimSpace(v)
-		if v != "" && v != "false" {
-			return true
-		}
-	}
-	return false
-}
-
-func (c *configImpl) UseRBER8() bool {
-	if !c.UseRBE() {
-		return false
-	}
-
-	if v, ok := c.environ.Get("RBE_R8"); ok {
-		v = strings.TrimSpace(v)
-		if v != "" && v != "false" {
-			return true
-		}
-	}
-	return false
-}
-
-func (c *configImpl) UseRBED8() bool {
-	if !c.UseRBE() {
-		return false
-	}
-
-	if v, ok := c.environ.Get("RBE_D8"); ok {
 		v = strings.TrimSpace(v)
 		if v != "" && v != "false" {
 			return true

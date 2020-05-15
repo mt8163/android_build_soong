@@ -102,6 +102,10 @@ type LibraryProperties struct {
 
 		// Symbol tags that should be ignored from the symbol file
 		Exclude_symbol_tags []string
+
+		// Run checks on all APIs (in addition to the ones referred by
+		// one of exported ELF symbols.)
+		Check_all_apis *bool
 	}
 
 	// Order symbols in .bss section by their sizes.  Only useful for shared libraries.
@@ -195,6 +199,7 @@ func LibraryFactory() android.Module {
 	module.sdkMemberTypes = []android.SdkMemberType{
 		sharedLibrarySdkMemberType,
 		staticLibrarySdkMemberType,
+		staticAndSharedLibrarySdkMemberType,
 	}
 	return module.Init()
 }
@@ -375,7 +380,7 @@ type libraryDecorator struct {
 	useCoreVariant       bool
 	checkSameCoreVariant bool
 
-	// Decorated interafaces
+	// Decorated interfaces
 	*baseCompiler
 	*baseLinker
 	*baseInstaller
@@ -748,10 +753,12 @@ func (library *libraryDecorator) compilerDeps(ctx DepsContext, deps Deps) Deps {
 
 func (library *libraryDecorator) linkerDeps(ctx DepsContext, deps Deps) Deps {
 	if library.static() {
+		// Compare with nil because an empty list needs to be propagated.
 		if library.StaticProperties.Static.System_shared_libs != nil {
 			library.baseLinker.Properties.System_shared_libs = library.StaticProperties.Static.System_shared_libs
 		}
 	} else if library.shared() {
+		// Compare with nil because an empty list needs to be propagated.
 		if library.SharedProperties.Shared.System_shared_libs != nil {
 			library.baseLinker.Properties.System_shared_libs = library.SharedProperties.Shared.System_shared_libs
 		}
@@ -827,10 +834,21 @@ func (library *libraryDecorator) linkerSpecifiedDeps(specifiedDeps specifiedDeps
 	}
 
 	specifiedDeps.sharedLibs = append(specifiedDeps.sharedLibs, properties.Shared_libs...)
-	specifiedDeps.systemSharedLibs = append(specifiedDeps.systemSharedLibs, properties.System_shared_libs...)
+
+	// Must distinguish nil and [] in system_shared_libs - ensure that [] in
+	// either input list doesn't come out as nil.
+	if specifiedDeps.systemSharedLibs == nil {
+		specifiedDeps.systemSharedLibs = properties.System_shared_libs
+	} else {
+		specifiedDeps.systemSharedLibs = append(specifiedDeps.systemSharedLibs, properties.System_shared_libs...)
+	}
 
 	specifiedDeps.sharedLibs = android.FirstUniqueStrings(specifiedDeps.sharedLibs)
-	specifiedDeps.systemSharedLibs = android.FirstUniqueStrings(specifiedDeps.systemSharedLibs)
+	if len(specifiedDeps.systemSharedLibs) > 0 {
+		// Skip this if systemSharedLibs is either nil or [], to ensure they are
+		// retained.
+		specifiedDeps.systemSharedLibs = android.FirstUniqueStrings(specifiedDeps.systemSharedLibs)
+	}
 	return specifiedDeps
 }
 
@@ -1010,8 +1028,9 @@ func (library *libraryDecorator) coverageOutputFilePath() android.OptionalPath {
 }
 
 func getRefAbiDumpFile(ctx ModuleContext, vndkVersion, fileName string) android.Path {
+	// The logic must be consistent with classifySourceAbiDump.
 	isNdk := ctx.isNdk()
-	isLlndkOrVndk := ctx.isLlndkPublic(ctx.Config()) || ctx.isVndk()
+	isLlndkOrVndk := ctx.isLlndkPublic(ctx.Config()) || (ctx.useVndk() && ctx.isVndk())
 
 	refAbiDumpTextFile := android.PathForVndkRefAbiDump(ctx, vndkVersion, fileName, isNdk, isLlndkOrVndk, false)
 	refAbiDumpGzipFile := android.PathForVndkRefAbiDump(ctx, vndkVersion, fileName, isNdk, isLlndkOrVndk, true)
@@ -1057,7 +1076,9 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, objs Objec
 		refAbiDumpFile := getRefAbiDumpFile(ctx, vndkVersion, fileName)
 		if refAbiDumpFile != nil {
 			library.sAbiDiff = SourceAbiDiff(ctx, library.sAbiOutputFile.Path(),
-				refAbiDumpFile, fileName, exportedHeaderFlags, ctx.isLlndk(ctx.Config()), ctx.isNdk(), ctx.isVndkExt())
+				refAbiDumpFile, fileName, exportedHeaderFlags,
+				Bool(library.Properties.Header_abi_checker.Check_all_apis),
+				ctx.isLlndk(ctx.Config()), ctx.isNdk(), ctx.isVndkExt())
 		}
 	}
 }
@@ -1222,7 +1243,7 @@ func (library *libraryDecorator) install(ctx ModuleContext, file android.Path) {
 	if Bool(library.Properties.Static_ndk_lib) && library.static() &&
 		!ctx.useVndk() && !ctx.inRamdisk() && !ctx.inRecovery() && ctx.Device() &&
 		library.baseLinker.sanitize.isUnsanitizedVariant() &&
-		!library.buildStubs() {
+		!library.buildStubs() && ctx.sdkVersion() == "" {
 		installPath := getNdkSysrootBase(ctx).Join(
 			ctx, "usr/lib", config.NDKTriple(ctx.toolchain()), file.Base())
 
@@ -1314,6 +1335,18 @@ func (library *libraryDecorator) availableFor(what string) bool {
 	return android.CheckAvailableForApex(what, list)
 }
 
+func (library *libraryDecorator) skipInstall(mod *Module) {
+	if library.static() && library.buildStatic() && !library.buildStubs() {
+		// If we're asked to skip installation of a static library (in particular
+		// when it's not //apex_available:platform) we still want an AndroidMk entry
+		// for it to ensure we get the relevant NOTICE file targets (cf.
+		// notice_files.mk) that other libraries might depend on. AndroidMkEntries
+		// always sets LOCAL_UNINSTALLABLE_MODULE for these entries.
+		return
+	}
+	mod.ModuleBase.SkipInstall()
+}
+
 var versioningMacroNamesListKey = android.NewOnceKey("versioningMacroNamesList")
 
 func versioningMacroNamesList(config android.Config) *map[string]string {
@@ -1329,7 +1362,7 @@ var charsNotForMacro = regexp.MustCompile("[^a-zA-Z0-9_]+")
 
 func versioningMacroName(moduleName string) string {
 	macroName := charsNotForMacro.ReplaceAllString(moduleName, "_")
-	macroName = strings.ToUpper(moduleName)
+	macroName = strings.ToUpper(macroName)
 	return "__" + macroName + "_API__"
 }
 
@@ -1370,6 +1403,8 @@ func reuseStaticLibrary(mctx android.BottomUpMutatorContext, static, shared *Mod
 			len(sharedCompiler.SharedProperties.Shared.Static_libs) == 0 &&
 			len(staticCompiler.StaticProperties.Static.Shared_libs) == 0 &&
 			len(sharedCompiler.SharedProperties.Shared.Shared_libs) == 0 &&
+			// Compare System_shared_libs properties with nil because empty lists are
+			// semantically significant for them.
 			staticCompiler.StaticProperties.Static.System_shared_libs == nil &&
 			sharedCompiler.SharedProperties.Shared.System_shared_libs == nil {
 
@@ -1472,54 +1507,85 @@ func LatestStubsVersionFor(config android.Config, name string) string {
 	return ""
 }
 
-func checkVersions(ctx android.BaseModuleContext, versions []string) {
+func normalizeVersions(ctx android.BaseModuleContext, versions []string) {
 	numVersions := make([]int, len(versions))
 	for i, v := range versions {
-		numVer, err := strconv.Atoi(v)
+		numVer, err := android.ApiStrToNum(ctx, v)
 		if err != nil {
-			ctx.PropertyErrorf("versions", "%q is not a number", v)
+			ctx.PropertyErrorf("versions", "%s", err.Error())
+			return
 		}
 		numVersions[i] = numVer
 	}
 	if !sort.IsSorted(sort.IntSlice(numVersions)) {
 		ctx.PropertyErrorf("versions", "not sorted: %v", versions)
 	}
+	for i, v := range numVersions {
+		versions[i] = strconv.Itoa(v)
+	}
 }
 
-// Version mutator splits a module into the mandatory non-stubs variant
+func createVersionVariations(mctx android.BottomUpMutatorContext, versions []string) {
+	// "" is for the non-stubs variant
+	versions = append([]string{""}, versions...)
+
+	modules := mctx.CreateVariations(versions...)
+	for i, m := range modules {
+		if versions[i] != "" {
+			m.(LinkableInterface).SetBuildStubs()
+			m.(LinkableInterface).SetStubsVersions(versions[i])
+		}
+	}
+}
+
+func VersionVariantAvailable(module interface {
+	Host() bool
+	InRamdisk() bool
+	InRecovery() bool
+}) bool {
+	return !module.Host() && !module.InRamdisk() && !module.InRecovery()
+}
+
+// VersionMutator splits a module into the mandatory non-stubs variant
 // (which is unnamed) and zero or more stubs variants.
 func VersionMutator(mctx android.BottomUpMutatorContext) {
-	if library, ok := mctx.Module().(LinkableInterface); ok && !library.InRecovery() {
+	if library, ok := mctx.Module().(LinkableInterface); ok && VersionVariantAvailable(library) {
 		if library.CcLibrary() && library.BuildSharedVariant() && len(library.StubsVersions()) > 0 {
 			versions := library.StubsVersions()
-			checkVersions(mctx, versions)
+			normalizeVersions(mctx, versions)
 			if mctx.Failed() {
 				return
 			}
 
-			// save the list of versions for later use
 			stubsVersionsLock.Lock()
 			defer stubsVersionsLock.Unlock()
+			// save the list of versions for later use
 			stubsVersionsFor(mctx.Config())[mctx.ModuleName()] = versions
 
-			// "" is for the non-stubs variant
-			versions = append([]string{""}, versions...)
-
-			modules := mctx.CreateVariations(versions...)
-			for i, m := range modules {
-				if versions[i] != "" {
-					m.(LinkableInterface).SetBuildStubs()
-					m.(LinkableInterface).SetStubsVersions(versions[i])
-				}
-			}
-		} else {
-			mctx.CreateVariations("")
+			createVersionVariations(mctx, versions)
+			return
 		}
+
+		if c, ok := library.(*Module); ok && c.IsStubs() {
+			stubsVersionsLock.Lock()
+			defer stubsVersionsLock.Unlock()
+			// For LLNDK llndk_library, we borrow vstubs.ersions from its implementation library.
+			// Since llndk_library has dependency to its implementation library,
+			// we can safely access stubsVersionsFor() with its baseModuleName.
+			versions := stubsVersionsFor(mctx.Config())[c.BaseModuleName()]
+			// save the list of versions for later use
+			stubsVersionsFor(mctx.Config())[mctx.ModuleName()] = versions
+
+			createVersionVariations(mctx, versions)
+			return
+		}
+
+		mctx.CreateVariations("")
 		return
 	}
 	if genrule, ok := mctx.Module().(*genrule.Module); ok {
 		if _, ok := genrule.Extra.(*GenruleExtraProperties); ok {
-			if !genrule.InRecovery() {
+			if VersionVariantAvailable(genrule) {
 				mctx.CreateVariations("")
 				return
 			}

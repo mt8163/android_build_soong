@@ -230,12 +230,16 @@ func (a *apexBundle) buildManifest(ctx android.ModuleContext, provideNativeLibs,
 func (a *apexBundle) buildNoticeFiles(ctx android.ModuleContext, apexFileName string) android.NoticeOutputs {
 	var noticeFiles android.Paths
 
-	a.walkPayloadDeps(ctx, func(ctx android.ModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) {
+	a.walkPayloadDeps(ctx, func(ctx android.ModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) bool {
 		if externalDep {
-			return
+			// As soon as the dependency graph crosses the APEX boundary, don't go further.
+			return false
 		}
+
 		notices := to.NoticeFiles()
 		noticeFiles = append(noticeFiles, notices...)
+
+		return true
 	})
 
 	if len(noticeFiles) == 0 {
@@ -333,7 +337,6 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 	for _, fi := range a.filesInfo {
 		destPath := android.PathForModuleOut(ctx, "image"+suffix, fi.Path()).String()
 		copyCommands = append(copyCommands, "mkdir -p "+filepath.Dir(destPath))
-
 		if a.linkToSystemLib && fi.transitiveDep && fi.AvailableToPlatform() {
 			// TODO(jiyong): pathOnDevice should come from fi.module, not being calculated here
 			pathOnDevice := filepath.Join("/system", fi.Path())
@@ -342,16 +345,23 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 			copyCommands = append(copyCommands, "cp -f "+fi.builtFile.String()+" "+destPath)
 			implicitInputs = append(implicitInputs, fi.builtFile)
 		}
-
 		// create additional symlinks pointing the file inside the APEX
 		for _, symlinkPath := range fi.SymlinkPaths() {
 			symlinkDest := android.PathForModuleOut(ctx, "image"+suffix, symlinkPath).String()
-			symlinkTarget, err := filepath.Rel(filepath.Dir(symlinkDest), destPath)
-			if err != nil {
-				panic("Cannot compute relative path from " + destPath + " to " + filepath.Dir(symlinkDest))
+			copyCommands = append(copyCommands, "ln -sfn "+filepath.Base(destPath)+" "+symlinkDest)
+		}
+		for _, d := range fi.dataPaths {
+			// TODO(eakammer): This is now the third repetition of ~this logic for test paths, refactoring should be possible
+			relPath := d.Rel()
+			dataPath := d.String()
+			if !strings.HasSuffix(dataPath, relPath) {
+				panic(fmt.Errorf("path %q does not end with %q", dataPath, relPath))
 			}
-			copyCommands = append(copyCommands, "mkdir -p "+filepath.Dir(symlinkDest))
-			copyCommands = append(copyCommands, "ln -sfn "+symlinkTarget+" "+symlinkDest)
+
+			dataDest := android.PathForModuleOut(ctx, "image"+suffix, fi.apexRelativePath(relPath)).String()
+
+			copyCommands = append(copyCommands, "cp -f "+d.String()+" "+dataDest)
+			implicitInputs = append(implicitInputs, d)
 		}
 	}
 
@@ -409,12 +419,14 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 			pathInApex := filepath.Join(f.installDir, f.builtFile.Base())
 			if f.installDir == "bin" || strings.HasPrefix(f.installDir, "bin/") {
 				executablePaths = append(executablePaths, pathInApex)
+				for _, d := range f.dataPaths {
+					readOnlyPaths = append(readOnlyPaths, filepath.Join(f.installDir, d.Rel()))
+				}
 				for _, s := range f.symlinks {
 					executablePaths = append(executablePaths, filepath.Join(f.installDir, s))
 				}
 			} else {
 				readOnlyPaths = append(readOnlyPaths, pathInApex)
-				readOnlyPaths = append(readOnlyPaths, f.SymlinkPaths()...)
 			}
 			dir := f.installDir
 			for !android.InList(dir, executablePaths) && dir != "" {
@@ -495,6 +507,10 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 			// don't need hashtree for activation. Therefore, by removing hashtree from
 			// apex bundle (filesystem image in it, to be specific), we can save storage.
 			optFlags = append(optFlags, "--no_hashtree")
+		}
+
+		if a.testOnlyShouldSkipPayloadSign() {
+			optFlags = append(optFlags, "--unsigned_payload")
 		}
 
 		if a.properties.Apex_name != nil {
@@ -688,29 +704,48 @@ func (a *apexBundle) buildApexDependencyInfo(ctx android.ModuleContext) {
 		return
 	}
 
-	var content strings.Builder
-	for _, key := range android.SortedStringKeys(a.depInfos) {
-		info := a.depInfos[key]
-		toName := info.to
-		if info.isExternal {
-			toName = toName + " (external)"
+	depInfos := android.DepNameToDepInfoMap{}
+	a.walkPayloadDeps(ctx, func(ctx android.ModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) bool {
+		if from.Name() == to.Name() {
+			// This can happen for cc.reuseObjTag. We are not interested in tracking this.
+			// As soon as the dependency graph crosses the APEX boundary, don't go further.
+			return !externalDep
 		}
-		fmt.Fprintf(&content, "%s <- %s\\n", toName, strings.Join(android.SortedUniqueStrings(info.from), ", "))
-	}
 
-	depsInfoFile := android.PathForOutput(ctx, a.Name()+"-deps-info.txt")
-	ctx.Build(pctx, android.BuildParams{
-		Rule:        android.WriteFile,
-		Description: "Dependency Info",
-		Output:      depsInfoFile,
-		Args: map[string]string{
-			"content": content.String(),
-		},
+		if info, exists := depInfos[to.Name()]; exists {
+			if !android.InList(from.Name(), info.From) {
+				info.From = append(info.From, from.Name())
+			}
+			info.IsExternal = info.IsExternal && externalDep
+			depInfos[to.Name()] = info
+		} else {
+			toMinSdkVersion := "(no version)"
+			if m, ok := to.(interface{ MinSdkVersion() string }); ok {
+				if v := m.MinSdkVersion(); v != "" {
+					toMinSdkVersion = v
+				}
+			}
+
+			depInfos[to.Name()] = android.ApexModuleDepInfo{
+				To:            to.Name(),
+				From:          []string{from.Name()},
+				IsExternal:    externalDep,
+				MinSdkVersion: toMinSdkVersion,
+			}
+		}
+
+		// As soon as the dependency graph crosses the APEX boundary, don't go further.
+		return !externalDep
 	})
+
+	a.ApexBundleDepsInfo.BuildDepsInfoLists(ctx, proptools.String(a.properties.Min_sdk_version), depInfos)
 
 	ctx.Build(pctx, android.BuildParams{
 		Rule:   android.Phony,
 		Output: android.PathForPhony(ctx, a.Name()+"-deps-info"),
-		Inputs: []android.Path{depsInfoFile},
+		Inputs: []android.Path{
+			a.ApexBundleDepsInfo.FullListPath(),
+			a.ApexBundleDepsInfo.FlatListPath(),
+		},
 	})
 }

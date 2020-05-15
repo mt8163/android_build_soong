@@ -652,22 +652,6 @@ func (c *config) PlatformVersionActiveCodenames() []string {
 	return c.productVariables.Platform_version_active_codenames
 }
 
-// Codenames that are available in the branch but not included in the current
-// lunch target.
-func (c *config) PlatformVersionFutureCodenames() []string {
-	return c.productVariables.Platform_version_future_codenames
-}
-
-// All possible codenames in the current branch. NB: Not named AllCodenames
-// because "all" has historically meant "active" in make, and still does in
-// build.prop.
-func (c *config) PlatformVersionCombinedCodenames() []string {
-	combined := []string{}
-	combined = append(combined, c.PlatformVersionActiveCodenames()...)
-	combined = append(combined, c.PlatformVersionFutureCodenames()...)
-	return combined
-}
-
 func (c *config) ProductAAPTConfig() []string {
 	return c.productVariables.AAPTConfig
 }
@@ -872,6 +856,13 @@ func (c *config) ArtUseReadBarrier() bool {
 
 func (c *config) EnforceRROForModule(name string) bool {
 	enforceList := c.productVariables.EnforceRROTargets
+	// TODO(b/150820813) Some modules depend on static overlay, remove this after eliminating the dependency.
+	exemptedList := c.productVariables.EnforceRROExemptedTargets
+	if exemptedList != nil {
+		if InList(name, exemptedList) {
+			return false
+		}
+	}
 	if enforceList != nil {
 		if InList("*", enforceList) {
 			return true
@@ -915,13 +906,18 @@ func SplitApexJarPair(apexJarValue string) (string, string) {
 	return apexJarPair[0], apexJarPair[1]
 }
 
-func (c *config) BootJars() []string {
-	jars := c.productVariables.BootJars
-	for _, p := range c.productVariables.UpdatableBootJars {
+func GetJarsFromApexJarPairs(apexJarPairs []string) []string {
+	modules := make([]string, len(apexJarPairs))
+	for i, p := range apexJarPairs {
 		_, jar := SplitApexJarPair(p)
-		jars = append(jars, jar)
+		modules[i] = jar
 	}
-	return jars
+	return modules
+}
+
+func (c *config) BootJars() []string {
+	return append(GetJarsFromApexJarPairs(c.productVariables.BootJars),
+		GetJarsFromApexJarPairs(c.productVariables.UpdatableBootJars)...)
 }
 
 func (c *config) DexpreoptGlobalConfig(ctx PathContext) ([]byte, error) {
@@ -1023,6 +1019,10 @@ func (c *deviceConfig) BtConfigIncludeDir() string {
 
 func (c *deviceConfig) DeviceKernelHeaderDirs() []string {
 	return c.config.productVariables.DeviceKernelHeaders
+}
+
+func (c *deviceConfig) SamplingPGO() bool {
+	return Bool(c.config.productVariables.SamplingPGO)
 }
 
 func (c *config) NativeLineCoverage() bool {

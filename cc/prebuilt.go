@@ -26,6 +26,7 @@ func RegisterPrebuiltBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("cc_prebuilt_library", PrebuiltLibraryFactory)
 	ctx.RegisterModuleType("cc_prebuilt_library_shared", PrebuiltSharedLibraryFactory)
 	ctx.RegisterModuleType("cc_prebuilt_library_static", PrebuiltStaticLibraryFactory)
+	ctx.RegisterModuleType("cc_prebuilt_object", prebuiltObjectFactory)
 	ctx.RegisterModuleType("cc_prebuilt_binary", prebuiltBinaryFactory)
 }
 
@@ -42,6 +43,11 @@ type prebuiltLinkerProperties struct {
 	// Check the prebuilt ELF files (e.g. DT_SONAME, DT_NEEDED, resolution of undefined
 	// symbols, etc), default true.
 	Check_elf_files *bool
+
+	// Optionally provide an import library if this is a Windows PE DLL prebuilt.
+	// This is needed only if this library is linked by other modules in build time.
+	// Only makes sense for the Windows target.
+	Windows_import_lib *string `android:"path,arch_variant"`
 }
 
 type prebuiltLinker struct {
@@ -108,9 +114,16 @@ func (p *prebuiltLibraryLinker) link(ctx ModuleContext,
 
 		in := android.PathForModuleSrc(ctx, srcs[0])
 
+		if p.static() {
+			return in
+		}
+
 		if p.shared() {
 			p.unstrippedOutputFile = in
 			libName := p.libraryDecorator.getLibName(ctx) + flags.Toolchain.ShlibSuffix()
+			outputFile := android.PathForModuleOut(ctx, libName)
+			var implicits android.Paths
+
 			if p.needsStrip(ctx) {
 				stripped := android.PathForModuleOut(ctx, "stripped", libName)
 				p.stripExecutableOrSharedLib(ctx, in, stripped, builderFlags)
@@ -121,10 +134,41 @@ func (p *prebuiltLibraryLinker) link(ctx ModuleContext,
 			// depending on a table of contents file instead of the library itself.
 			tocFile := android.PathForModuleOut(ctx, libName+".toc")
 			p.tocFile = android.OptionalPathForPath(tocFile)
-			TransformSharedObjectToToc(ctx, in, tocFile, builderFlags)
-		}
+			TransformSharedObjectToToc(ctx, outputFile, tocFile, builderFlags)
 
-		return in
+			if ctx.Windows() && p.properties.Windows_import_lib != nil {
+				// Consumers of this library actually links to the import library in build
+				// time and dynamically links to the DLL in run time. i.e.
+				// a.exe <-- static link --> foo.lib <-- dynamic link --> foo.dll
+				importLibSrc := android.PathForModuleSrc(ctx, String(p.properties.Windows_import_lib))
+				importLibName := p.libraryDecorator.getLibName(ctx) + ".lib"
+				importLibOutputFile := android.PathForModuleOut(ctx, importLibName)
+				implicits = append(implicits, importLibOutputFile)
+
+				ctx.Build(pctx, android.BuildParams{
+					Rule:        android.Cp,
+					Description: "prebuilt import library",
+					Input:       importLibSrc,
+					Output:      importLibOutputFile,
+					Args: map[string]string{
+						"cpFlags": "-L",
+					},
+				})
+			}
+
+			ctx.Build(pctx, android.BuildParams{
+				Rule:        android.Cp,
+				Description: "prebuilt shared library",
+				Implicits:   implicits,
+				Input:       in,
+				Output:      outputFile,
+				Args: map[string]string{
+					"cpFlags": "-L",
+				},
+			})
+
+			return outputFile
+		}
 	}
 
 	return nil
@@ -154,6 +198,10 @@ func (p *prebuiltLibraryLinker) disablePrebuilt() {
 	p.properties.Srcs = nil
 }
 
+func (p *prebuiltLibraryLinker) skipInstall(mod *Module) {
+	mod.ModuleBase.SkipInstall()
+}
+
 func NewPrebuiltLibrary(hod android.HostOrDeviceSupported) (*Module, *libraryDecorator) {
 	module, library := NewLibrary(hod)
 	module.compiler = nil
@@ -162,6 +210,7 @@ func NewPrebuiltLibrary(hod android.HostOrDeviceSupported) (*Module, *libraryDec
 		libraryDecorator: library,
 	}
 	module.linker = prebuilt
+	module.installer = prebuilt
 
 	module.AddProperties(&prebuilt.properties)
 
@@ -215,6 +264,50 @@ func NewPrebuiltStaticLibrary(hod android.HostOrDeviceSupported) (*Module, *libr
 	module, library := NewPrebuiltLibrary(hod)
 	library.BuildOnlyStatic()
 	return module, library
+}
+
+type prebuiltObjectProperties struct {
+	Srcs []string `android:"path,arch_variant"`
+}
+
+type prebuiltObjectLinker struct {
+	android.Prebuilt
+	objectLinker
+
+	properties prebuiltObjectProperties
+}
+
+func (p *prebuiltObjectLinker) prebuilt() *android.Prebuilt {
+	return &p.Prebuilt
+}
+
+var _ prebuiltLinkerInterface = (*prebuiltObjectLinker)(nil)
+
+func (p *prebuiltObjectLinker) link(ctx ModuleContext,
+	flags Flags, deps PathDeps, objs Objects) android.Path {
+	if len(p.properties.Srcs) > 0 {
+		return p.Prebuilt.SingleSourcePath(ctx)
+	}
+	return nil
+}
+
+func newPrebuiltObject() *Module {
+	module := newObject()
+	prebuilt := &prebuiltObjectLinker{
+		objectLinker: objectLinker{
+			baseLinker: NewBaseLinker(nil),
+		},
+	}
+	module.linker = prebuilt
+	module.AddProperties(&prebuilt.properties)
+	android.InitPrebuiltModule(module, &prebuilt.properties.Srcs)
+	android.InitSdkAwareModule(module)
+	return module
+}
+
+func prebuiltObjectFactory() android.Module {
+	module := newPrebuiltObject()
+	return module.Init()
 }
 
 type prebuiltBinaryLinker struct {

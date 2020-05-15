@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"android/soong/android"
+	"android/soong/remoteexec"
 )
 
 var (
@@ -127,8 +128,8 @@ var (
 
 	// prebuilts/clang default settings.
 	ClangDefaultBase         = "prebuilts/clang/host"
-	ClangDefaultVersion      = "clang-r377782b"
-	ClangDefaultShortVersion = "10.0.4"
+	ClangDefaultVersion      = "clang-r383902"
+	ClangDefaultShortVersion = "11.0.1"
 
 	// Directories with warnings from Android.bp files.
 	WarningAllowedProjects = []string{
@@ -255,16 +256,21 @@ func init() {
 		}
 		return ""
 	})
+
+	pctx.VariableFunc("RECXXPool", remoteexec.EnvOverrideFunc("RBE_CXX_POOL", remoteexec.DefaultPool))
+	pctx.VariableFunc("RECXXLinksPool", remoteexec.EnvOverrideFunc("RBE_CXX_LINKS_POOL", remoteexec.DefaultPool))
+	pctx.VariableFunc("RECXXLinksExecStrategy", remoteexec.EnvOverrideFunc("RBE_CXX_LINKS_EXEC_STRATEGY", remoteexec.LocalExecStrategy))
+	pctx.VariableFunc("REAbiDumperExecStrategy", remoteexec.EnvOverrideFunc("RBE_ABI_DUMPER_EXEC_STRATEGY", remoteexec.LocalExecStrategy))
+	pctx.VariableFunc("REAbiLinkerExecStrategy", remoteexec.EnvOverrideFunc("RBE_ABI_LINKER_EXEC_STRATEGY", remoteexec.LocalExecStrategy))
 }
 
 var HostPrebuiltTag = pctx.VariableConfigMethod("HostPrebuiltTag", android.Config.PrebuiltOS)
 
-func bionicHeaders(kernelArch string) string {
-	return strings.Join([]string{
-		"-isystem bionic/libc/include",
-		"-isystem bionic/libc/kernel/uapi",
-		"-isystem bionic/libc/kernel/uapi/asm-" + kernelArch,
-		"-isystem bionic/libc/kernel/android/scsi",
-		"-isystem bionic/libc/kernel/android/uapi",
-	}, " ")
+func envOverrideFunc(envVar, defaultVal string) func(ctx android.PackageVarContext) string {
+	return func(ctx android.PackageVarContext) string {
+		if override := ctx.Config().Getenv(envVar); override != "" {
+			return override
+		}
+		return defaultVal
+	}
 }

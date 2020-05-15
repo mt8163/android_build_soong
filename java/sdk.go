@@ -147,6 +147,10 @@ type sdkSpec struct {
 	raw     string
 }
 
+func (s sdkSpec) String() string {
+	return fmt.Sprintf("%s_%s", s.kind, s.version)
+}
+
 // valid checks if this sdkSpec is well-formed. Note however that true doesn't mean that the
 // specified SDK actually exists.
 func (s sdkSpec) valid() bool {
@@ -156,6 +160,26 @@ func (s sdkSpec) valid() bool {
 // specified checks if this sdkSpec is well-formed and is not "".
 func (s sdkSpec) specified() bool {
 	return s.valid() && s.kind != sdkPrivate
+}
+
+// whether the API surface is managed and versioned, i.e. has .txt file that
+// get frozen on SDK freeze and changes get reviewed by API council.
+func (s sdkSpec) stable() bool {
+	if !s.specified() {
+		return false
+	}
+	switch s.kind {
+	case sdkNone:
+		// there is nothing to manage and version in this case; de facto stable API.
+		return true
+	case sdkCore, sdkPublic, sdkSystem, sdkModule, sdkSystemServer:
+		return true
+	case sdkCorePlatform, sdkTest, sdkPrivate:
+		return false
+	default:
+		panic(fmt.Errorf("unknown sdkKind=%v", s.kind))
+	}
+	return false
 }
 
 // prebuiltSdkAvailableForUnbundledBuilt tells whether this sdkSpec can have a prebuilt SDK
@@ -406,7 +430,7 @@ func decodeSdkDep(ctx android.EarlyModuleContext, sdkContext sdkContext) sdkDep 
 		return toModule([]string{"android_module_lib_stubs_current"}, "framework-res", sdkFrameworkAidlPath(ctx))
 	case sdkSystemServer:
 		// TODO(146757305): provide .apk and .aidl that have more APIs for modules
-		return toModule([]string{"android_module_lib_stubs_current", "services-stubs"}, "framework-res", sdkFrameworkAidlPath(ctx))
+		return toModule([]string{"android_system_server_stubs_current"}, "framework-res", sdkFrameworkAidlPath(ctx))
 	default:
 		panic(fmt.Errorf("invalid sdk %q", sdkVersion.raw))
 	}

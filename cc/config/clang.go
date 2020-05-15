@@ -48,6 +48,8 @@ var ClangUnknownCflags = sorted([]string{
 	"-Wunused-but-set-parameter",
 	"-Wunused-but-set-variable",
 	"-fdiagnostics-color",
+	// http://b/153759688
+	"-fuse-init-array",
 
 	// arm + arm64
 	"-fgcse-after-reload",
@@ -80,10 +82,8 @@ var ClangUnknownCflags = sorted([]string{
 
 // Ldflags that should be filtered out when linking with clang lld
 var ClangUnknownLldflags = sorted([]string{
-	"-fuse-ld=gold",
 	"-Wl,--fix-cortex-a8",
 	"-Wl,--no-fix-cortex-a8",
-	"-Wl,-m,aarch64_elf64_le_vec",
 })
 
 var ClangLibToolingUnknownCflags = sorted([]string{})
@@ -114,9 +114,6 @@ func init() {
 		// Force clang to always output color diagnostics. Ninja will strip the ANSI
 		// color codes if it is not running in a terminal.
 		"-fcolor-diagnostics",
-
-		// http://b/68236239 Allow 0/NULL instead of using nullptr everywhere.
-		"-Wno-zero-as-null-pointer-constant",
 
 		// Warnings from clang-7.0
 		"-Wno-sign-compare",
@@ -168,6 +165,17 @@ func init() {
 		"-Wno-int-in-bool-context",          // http://b/148287349
 		"-Wno-sizeof-array-div",             // http://b/148815709
 		"-Wno-tautological-overlap-compare", // http://b/148815696
+		// New warnings to be fixed after clang-r383902.
+		"-Wno-deprecated-copy",                      // http://b/153746672
+		"-Wno-range-loop-construct",                 // http://b/153747076
+		"-Wno-misleading-indentation",               // http://b/153746954
+		"-Wno-zero-as-null-pointer-constant",        // http://b/68236239
+		"-Wno-deprecated-anon-enum-enum-conversion", // http://b/153746485
+		"-Wno-deprecated-enum-enum-conversion",      // http://b/153746563
+		"-Wno-string-compare",                       // http://b/153764102
+		"-Wno-enum-enum-conversion",                 // http://b/154138986
+		"-Wno-enum-float-conversion",                // http://b/154255917
+		"-Wno-pessimizing-move",                     // http://b/154270751
 	}, " "))
 
 	// Extra cflags for external third-party projects to disable warnings that
