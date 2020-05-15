@@ -18,10 +18,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
-
-	"github.com/google/blueprint"
 )
 
 const (
@@ -33,15 +30,6 @@ type ApexInfo struct {
 	ApexName string
 
 	MinSdkVersion int
-	Updatable     bool
-}
-
-// Extracted from ApexModule to make it easier to define custom subsets of the
-// ApexModule interface and improve code navigation within the IDE.
-type DepIsInSameApex interface {
-	// DepIsInSameApex tests if the other module 'dep' is installed to the same
-	// APEX as this module
-	DepIsInSameApex(ctx BaseModuleContext, dep Module) bool
 }
 
 // ApexModule is the interface that a module type is expected to implement if
@@ -61,8 +49,6 @@ type DepIsInSameApex interface {
 // respectively.
 type ApexModule interface {
 	Module
-	DepIsInSameApex
-
 	apexModuleBase() *ApexModuleBase
 
 	// Marks that this module should be built for the specified APEXes.
@@ -102,28 +88,16 @@ type ApexModule interface {
 	// Tests if this module is available for the specified APEX or ":platform"
 	AvailableFor(what string) bool
 
-	// Return true if this module is not available to platform (i.e. apex_available
-	// property doesn't have "//apex_available:platform"), or shouldn't be available
-	// to platform, which is the case when this module depends on other module that
-	// isn't available to platform.
-	NotAvailableForPlatform() bool
+	// DepIsInSameApex tests if the other module 'dep' is installed to the same
+	// APEX as this module
+	DepIsInSameApex(ctx BaseModuleContext, dep Module) bool
 
-	// Mark that this module is not available to platform. Set by the
-	// check-platform-availability mutator in the apex package.
-	SetNotAvailableForPlatform()
+	// Returns the highest version which is <= min_sdk_version.
+	// For example, with min_sdk_version is 10 and versionList is [9,11]
+	// it returns 9.
+	ChooseSdkVersion(versionList []string, useLatest bool) (string, error)
 
-	// Returns the highest version which is <= maxSdkVersion.
-	// For example, with maxSdkVersion is 10 and versionList is [9,11]
-	// it returns 9 as string
-	ChooseSdkVersion(versionList []string, maxSdkVersion int) (string, error)
-
-	// Tests if the module comes from an updatable APEX.
-	Updatable() bool
-
-	// List of APEXes that this module tests. The module has access to
-	// the private part of the listed APEXes even when it is not included in the
-	// APEXes.
-	TestFor() []string
+	ShouldSupportAndroid10() bool
 }
 
 type ApexProperties struct {
@@ -137,17 +111,6 @@ type ApexProperties struct {
 	Apex_available []string
 
 	Info ApexInfo `blueprint:"mutated"`
-
-	NotAvailableForPlatform bool `blueprint:"mutated"`
-}
-
-// Marker interface that identifies dependencies that are excluded from APEX
-// contents.
-type ExcludeFromApexContentsTag interface {
-	blueprint.DependencyTag
-
-	// Method that differentiates this interface from others.
-	ExcludeFromApexContents()
 }
 
 // Provides default implementation for the ApexModule interface. APEX-aware
@@ -167,11 +130,6 @@ func (m *ApexModuleBase) apexModuleBase() *ApexModuleBase {
 
 func (m *ApexModuleBase) ApexAvailable() []string {
 	return m.ApexProperties.Apex_available
-}
-
-func (m *ApexModuleBase) TestFor() []string {
-	// To be implemented by concrete types inheriting ApexModuleBase
-	return nil
 }
 
 func (m *ApexModuleBase) BuildForApexes(apexes []ApexInfo) {
@@ -228,14 +186,6 @@ func (m *ApexModuleBase) AvailableFor(what string) bool {
 	return CheckAvailableForApex(what, m.ApexProperties.Apex_available)
 }
 
-func (m *ApexModuleBase) NotAvailableForPlatform() bool {
-	return m.ApexProperties.NotAvailableForPlatform
-}
-
-func (m *ApexModuleBase) SetNotAvailableForPlatform() {
-	m.ApexProperties.NotAvailableForPlatform = true
-}
-
 func (m *ApexModuleBase) DepIsInSameApex(ctx BaseModuleContext, dep Module) bool {
 	// By default, if there is a dependency from A to B, we try to include both in the same APEX,
 	// unless B is explicitly from outside of the APEX (i.e. a stubs lib). Thus, returning true.
@@ -243,14 +193,22 @@ func (m *ApexModuleBase) DepIsInSameApex(ctx BaseModuleContext, dep Module) bool
 	return true
 }
 
-func (m *ApexModuleBase) ChooseSdkVersion(versionList []string, maxSdkVersion int) (string, error) {
+func (m *ApexModuleBase) ChooseSdkVersion(versionList []string, useLatest bool) (string, error) {
+	if useLatest {
+		return versionList[len(versionList)-1], nil
+	}
+	minSdkVersion := m.ApexProperties.Info.MinSdkVersion
 	for i := range versionList {
 		ver, _ := strconv.Atoi(versionList[len(versionList)-i-1])
-		if ver <= maxSdkVersion {
+		if ver <= minSdkVersion {
 			return versionList[len(versionList)-i-1], nil
 		}
 	}
-	return "", fmt.Errorf("not found a version(<=%d) in versionList: %v", maxSdkVersion, versionList)
+	return "", fmt.Errorf("min_sdk_version is set %v, but not found in %v", minSdkVersion, versionList)
+}
+
+func (m *ApexModuleBase) ShouldSupportAndroid10() bool {
+	return !m.IsForPlatform() && (m.ApexProperties.Info.MinSdkVersion <= SdkVersion_Android10)
 }
 
 func (m *ApexModuleBase) checkApexAvailableProperty(mctx BaseModuleContext) {
@@ -262,10 +220,6 @@ func (m *ApexModuleBase) checkApexAvailableProperty(mctx BaseModuleContext) {
 			mctx.PropertyErrorf("apex_available", "%q is not a valid module name", n)
 		}
 	}
-}
-
-func (m *ApexModuleBase) Updatable() bool {
-	return m.ApexProperties.Info.Updatable
 }
 
 type byApexName []ApexInfo
@@ -403,78 +357,4 @@ func InitApexModule(m ApexModule) {
 	base.canHaveApexVariants = true
 
 	m.AddProperties(&base.ApexProperties)
-}
-
-// A dependency info for a single ApexModule, either direct or transitive.
-type ApexModuleDepInfo struct {
-	// Name of the dependency
-	To string
-	// List of dependencies To belongs to. Includes APEX itself, if a direct dependency.
-	From []string
-	// Whether the dependency belongs to the final compiled APEX.
-	IsExternal bool
-	// min_sdk_version of the ApexModule
-	MinSdkVersion string
-}
-
-// A map of a dependency name to its ApexModuleDepInfo
-type DepNameToDepInfoMap map[string]ApexModuleDepInfo
-
-type ApexBundleDepsInfo struct {
-	flatListPath OutputPath
-	fullListPath OutputPath
-}
-
-type ApexDepsInfoIntf interface {
-	FlatListPath() Path
-	FullListPath() Path
-}
-
-func (d *ApexBundleDepsInfo) FlatListPath() Path {
-	return d.flatListPath
-}
-
-func (d *ApexBundleDepsInfo) FullListPath() Path {
-	return d.fullListPath
-}
-
-var _ ApexDepsInfoIntf = (*ApexBundleDepsInfo)(nil)
-
-// Generate two module out files:
-// 1. FullList with transitive deps and their parents in the dep graph
-// 2. FlatList with a flat list of transitive deps
-func (d *ApexBundleDepsInfo) BuildDepsInfoLists(ctx ModuleContext, minSdkVersion string, depInfos DepNameToDepInfoMap) {
-	var fullContent strings.Builder
-	var flatContent strings.Builder
-
-	fmt.Fprintf(&flatContent, "%s(minSdkVersion:%s):\\n", ctx.ModuleName(), minSdkVersion)
-	for _, key := range FirstUniqueStrings(SortedStringKeys(depInfos)) {
-		info := depInfos[key]
-		toName := fmt.Sprintf("%s(minSdkVersion:%s)", info.To, info.MinSdkVersion)
-		if info.IsExternal {
-			toName = toName + " (external)"
-		}
-		fmt.Fprintf(&fullContent, "%s <- %s\\n", toName, strings.Join(SortedUniqueStrings(info.From), ", "))
-		fmt.Fprintf(&flatContent, "  %s\\n", toName)
-	}
-
-	d.fullListPath = PathForModuleOut(ctx, "depsinfo", "fulllist.txt").OutputPath
-	ctx.Build(pctx, BuildParams{
-		Rule:        WriteFile,
-		Description: "Full Dependency Info",
-		Output:      d.fullListPath,
-		Args: map[string]string{
-			"content": fullContent.String(),
-		},
-	})
-
-	d.flatListPath = PathForModuleOut(ctx, "depsinfo", "flatlist.txt").OutputPath
-	ctx.Build(pctx, BuildParams{
-		Rule:        WriteFile,
-		Description: "Flat Dependency Info",
-		Output:      d.flatListPath,
-		Args: map[string]string{
-			"content": flatContent.String(),
-		},
-	})
 }

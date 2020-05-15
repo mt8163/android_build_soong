@@ -29,7 +29,7 @@ var headersLibrarySdkMemberType = &librarySdkMemberType{
 		SupportsSdk:  true,
 	},
 	prebuiltModuleType: "cc_prebuilt_library_headers",
-	noOutputFiles:      true,
+	linkTypes:          nil,
 }
 
 func RegisterLibraryHeadersBuildComponents(ctx android.RegistrationContext) {

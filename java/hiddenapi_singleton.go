@@ -211,30 +211,23 @@ func stubFlagsRule(ctx android.SingletonContext) {
 // the greylists.
 func flagsRule(ctx android.SingletonContext) android.Path {
 	var flagsCSV android.Paths
-	var greylistRemovedApis android.Paths
+
+	var greylistIgnoreConflicts android.Path
 
 	ctx.VisitAllModules(func(module android.Module) {
 		if h, ok := module.(hiddenAPIIntf); ok {
 			if csv := h.flagsCSV(); csv != nil {
 				flagsCSV = append(flagsCSV, csv)
 			}
-		} else if ds, ok := module.(*Droidstubs); ok {
-			// Track @removed public and system APIs via corresponding droidstubs targets.
-			// These APIs are not present in the stubs, however, we have to keep allowing access
-			// to them at runtime.
-			if m := ctx.ModuleName(module); m == "api-stubs-docs" || m == "system-api-stubs-docs" {
-				greylistRemovedApis = append(greylistRemovedApis, ds.removedDexApiFile)
-			}
+		} else if ds, ok := module.(*Droidstubs); ok && ctx.ModuleName(module) == "hiddenapi-lists-docs" {
+			greylistIgnoreConflicts = ds.removedDexApiFile
 		}
 	})
 
-	combinedRemovedApis := android.PathForOutput(ctx, "hiddenapi", "combined-removed-dex.txt")
-	ctx.Build(pctx, android.BuildParams{
-		Rule:        android.Cat,
-		Inputs:      greylistRemovedApis,
-		Output:      combinedRemovedApis,
-		Description: "Combine removed apis for " + combinedRemovedApis.String(),
-	})
+	if greylistIgnoreConflicts == nil {
+		ctx.Errorf("failed to find removed_dex_api_filename from hiddenapi-lists-docs module")
+		return nil
+	}
 
 	rule := android.NewRuleBuilder()
 
@@ -249,7 +242,8 @@ func flagsRule(ctx android.SingletonContext) android.Path {
 		Inputs(flagsCSV).
 		FlagWithInput("--greylist ",
 			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-greylist.txt")).
-		FlagWithInput("--greylist-ignore-conflicts ", combinedRemovedApis).
+		FlagWithInput("--greylist-ignore-conflicts ",
+			greylistIgnoreConflicts).
 		FlagWithInput("--greylist-max-q ",
 			android.PathForSource(ctx, "frameworks/base/config/hiddenapi-greylist-max-q.txt")).
 		FlagWithInput("--greylist-max-p ",

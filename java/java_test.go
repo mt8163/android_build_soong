@@ -1177,12 +1177,12 @@ func TestJavaSdkLibrary(t *testing.T) {
 
 	// check the existence of the internal modules
 	ctx.ModuleForTests("foo", "android_common")
-	ctx.ModuleForTests(apiScopePublic.stubsLibraryModuleName("foo"), "android_common")
-	ctx.ModuleForTests(apiScopeSystem.stubsLibraryModuleName("foo"), "android_common")
-	ctx.ModuleForTests(apiScopeTest.stubsLibraryModuleName("foo"), "android_common")
-	ctx.ModuleForTests(apiScopePublic.stubsSourceModuleName("foo"), "android_common")
-	ctx.ModuleForTests(apiScopeSystem.stubsSourceModuleName("foo"), "android_common")
-	ctx.ModuleForTests(apiScopeTest.stubsSourceModuleName("foo"), "android_common")
+	ctx.ModuleForTests("foo"+sdkStubsLibrarySuffix, "android_common")
+	ctx.ModuleForTests("foo"+sdkStubsLibrarySuffix+sdkSystemApiSuffix, "android_common")
+	ctx.ModuleForTests("foo"+sdkStubsLibrarySuffix+sdkTestApiSuffix, "android_common")
+	ctx.ModuleForTests("foo"+sdkStubsSourceSuffix, "android_common")
+	ctx.ModuleForTests("foo"+sdkStubsSourceSuffix+sdkSystemApiSuffix, "android_common")
+	ctx.ModuleForTests("foo"+sdkStubsSourceSuffix+sdkTestApiSuffix, "android_common")
 	ctx.ModuleForTests("foo"+sdkXmlFileSuffix, "android_common")
 	ctx.ModuleForTests("foo.api.public.28", "")
 	ctx.ModuleForTests("foo.api.system.28", "")
@@ -1227,38 +1227,6 @@ func TestJavaSdkLibrary(t *testing.T) {
 			t.Errorf("qux should export \"foo\" and \"bar\" but exports %v", sdkLibs)
 		}
 	}
-}
-
-func TestJavaSdkLibrary_InvalidScopes(t *testing.T) {
-	testJavaError(t, `module "foo": enabled api scope "system" depends on disabled scope "public"`, `
-		java_sdk_library {
-			name: "foo",
-			srcs: ["a.java", "b.java"],
-			api_packages: ["foo"],
-			// Explicitly disable public to test the check that ensures the set of enabled
-			// scopes is consistent.
-			public: {
-				enabled: false,
-			},
-			system: {
-				enabled: true,
-			},
-		}
-		`)
-}
-
-func TestJavaSdkLibrary_SdkVersion_ForScope(t *testing.T) {
-	testJava(t, `
-		java_sdk_library {
-			name: "foo",
-			srcs: ["a.java", "b.java"],
-			api_packages: ["foo"],
-			system: {
-				enabled: true,
-				sdk_version: "module_current",
-			},
-		}
-		`)
 }
 
 var compilerFlagsTestCases = []struct {
@@ -1521,29 +1489,5 @@ func checkBootClasspathForSystemModule(t *testing.T, ctx *android.TestContext, m
 	bootClasspath := javacRule.Args["bootClasspath"]
 	if strings.HasPrefix(bootClasspath, "--system ") && strings.HasSuffix(bootClasspath, expectedSuffix) {
 		t.Errorf("bootclasspath of %q must start with --system and end with %q, but was %#v.", moduleName, expectedSuffix, bootClasspath)
-	}
-}
-
-func TestAidlExportIncludeDirsFromImports(t *testing.T) {
-	ctx, _ := testJava(t, `
-		java_library {
-			name: "foo",
-			srcs: ["aidl/foo/IFoo.aidl"],
-			libs: ["bar"],
-		}
-
-		java_import {
-			name: "bar",
-			jars: ["a.jar"],
-			aidl: {
-				export_include_dirs: ["aidl/bar"],
-			},
-		}
-	`)
-
-	aidlCommand := ctx.ModuleForTests("foo", "android_common").Rule("aidl").RuleParams.Command
-	expectedAidlFlag := "-Iaidl/bar"
-	if !strings.Contains(aidlCommand, expectedAidlFlag) {
-		t.Errorf("aidl command %q does not contain %q", aidlCommand, expectedAidlFlag)
 	}
 }

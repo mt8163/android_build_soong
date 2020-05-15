@@ -289,9 +289,6 @@ Each rule in the property must be in one of the following forms:
 * `["//visibility:public"]`: Anyone can use this module.
 * `["//visibility:private"]`: Only rules in the module's package (not its
 subpackages) can use this module.
-* `["//visibility:override"]`: Discards any rules inherited from defaults or a
-creating module. Can only be used at the beginning of a list of visibility
-rules.
 * `["//some/package:__pkg__", "//other/package:__pkg__"]`: Only modules in
 `some/package` and `other/package` (defined in `some/package/*.bp` and
 `other/package/*.bp`) have access to this module. Note that sub-packages do not
@@ -422,9 +419,7 @@ soong_config_module_type {
     name: "acme_cc_defaults",
     module_type: "cc_defaults",
     config_namespace: "acme",
-    variables: ["board"],
-    bool_variables: ["feature"],
-    value_variables: ["width"],
+    variables: ["board", "feature"],
     properties: ["cflags", "srcs"],
 }
 
@@ -432,12 +427,15 @@ soong_config_string_variable {
     name: "board",
     values: ["soc_a", "soc_b"],
 }
+
+soong_config_bool_variable {
+    name: "feature",
+}
 ```
 
 This example describes a new `acme_cc_defaults` module type that extends the
-`cc_defaults` module type, with three additional conditionals based on
-variables `board`, `feature` and `width`, which can affect properties `cflags`
-and `srcs`.
+`cc_defaults` module type, with two additional conditionals based on variables
+`board` and `feature`, which can affect properties `cflags` and `srcs`.
 
 The values of the variables can be set from a product's `BoardConfig.mk` file:
 ```
@@ -448,7 +446,6 @@ SOONG_CONFIG_acme += \
 
 SOONG_CONFIG_acme_board := soc_a
 SOONG_CONFIG_acme_feature := true
-SOONG_CONFIG_acme_width := 200
 ```
 
 The `acme_cc_defaults` module type can be used anywhere after the definition in
@@ -477,9 +474,6 @@ acme_cc_defaults {
         feature: {
             cflags: ["-DFEATURE"],
         },
-        width: {
-            cflags: ["-DWIDTH=%s"],
-        },
     },
 }
 
@@ -491,7 +485,7 @@ cc_library {
 ```
 
 With the `BoardConfig.mk` snippet above, libacme_foo would build with
-cflags "-DGENERIC -DSOC_A -DFEATURE -DWIDTH=200".
+cflags "-DGENERIC -DSOC_A -DFEATURE".
 
 `soong_config_module_type` modules will work best when used to wrap defaults
 modules (`cc_defaults`, `java_defaults`, etc.), which can then be referenced

@@ -24,7 +24,6 @@ import (
 
 	"android/soong/android"
 	"android/soong/java/config"
-	"android/soong/remoteexec"
 )
 
 func init() {
@@ -178,14 +177,36 @@ type DroiddocProperties struct {
 	// filegroup or genrule can be included within this property.
 	Knowntags []string `android:"path"`
 
+	// the tag name used to distinguish if the API files belong to public/system/test.
+	Api_tag_name *string
+
 	// the generated public API filename by Doclava.
 	Api_filename *string
+
+	// the generated public Dex API filename by Doclava.
+	Dex_api_filename *string
+
+	// the generated private API filename by Doclava.
+	Private_api_filename *string
+
+	// the generated private Dex API filename by Doclava.
+	Private_dex_api_filename *string
 
 	// the generated removed API filename by Doclava.
 	Removed_api_filename *string
 
 	// the generated removed Dex API filename by Doclava.
 	Removed_dex_api_filename *string
+
+	// mapping of dex signatures to source file and line number. This is a temporary property and
+	// will be deleted; you probably shouldn't be using it.
+	Dex_mapping_filename *string
+
+	// the generated exact API filename by Doclava.
+	Exact_api_filename *string
+
+	// the generated proguard filename by Doclava.
+	Proguard_filename *string
 
 	// if set to false, don't allow droiddoc to generate stubs source files. Defaults to true.
 	Create_stubs *bool
@@ -208,8 +229,20 @@ type DroiddocProperties struct {
 }
 
 type DroidstubsProperties struct {
+	// the tag name used to distinguish if the API files belong to public/system/test.
+	Api_tag_name *string
+
 	// the generated public API filename by Metalava.
 	Api_filename *string
+
+	// the generated public Dex API filename by Metalava.
+	Dex_api_filename *string
+
+	// the generated private API filename by Metalava.
+	Private_api_filename *string
+
+	// the generated private Dex API filename by Metalava.
+	Private_dex_api_filename *string
 
 	// the generated removed API filename by Metalava.
 	Removed_api_filename *string
@@ -217,27 +250,23 @@ type DroidstubsProperties struct {
 	// the generated removed Dex API filename by Metalava.
 	Removed_dex_api_filename *string
 
+	// mapping of dex signatures to source file and line number. This is a temporary property and
+	// will be deleted; you probably shouldn't be using it.
+	Dex_mapping_filename *string
+
+	// the generated exact API filename by Metalava.
+	Exact_api_filename *string
+
+	// the generated proguard filename by Metalava.
+	Proguard_filename *string
+
 	Check_api struct {
 		Last_released ApiToCheck
 
 		Current ApiToCheck
 
-		// The java_sdk_library module generates references to modules (i.e. filegroups)
-		// from which information about the latest API version can be obtained. As those
-		// modules may not exist (e.g. because a previous version has not been released) it
-		// sets ignore_missing_latest_api=true on the droidstubs modules it creates so
-		// that droidstubs can ignore those references if the modules do not yet exist.
-		//
-		// If true then this will ignore module references for modules that do not exist
-		// in properties that supply the previous version of the API.
-		//
-		// There are two sets of those:
-		// * Api_file, Removed_api_file in check_api.last_released
-		// * New_since in check_api.api_lint.new_since
-		//
-		// The first two must be set as a pair, so either they should both exist or neither
-		// should exist - in which case when this property is true they are ignored. If one
-		// exists and the other does not then it is an error.
+		// do not perform API check against Last_released, in the case that both two specified API
+		// files by Last_released are modules which don't exist.
 		Ignore_missing_latest_api *bool `blueprint:"mutated"`
 
 		Api_lint struct {
@@ -271,11 +300,6 @@ type DroidstubsProperties struct {
 
 	// if set to true, allow Metalava to generate doc_stubs source files. Defaults to false.
 	Create_doc_stubs *bool
-
-	// if set to false then do not write out stubs. Defaults to true.
-	//
-	// TODO(b/146727827): Remove capability when we do not need to generate stubs and API separately.
-	Generate_stubs *bool
 
 	// is set to true, Metalava will allow framework SDK to contain API levels annotations.
 	Api_levels_annotations_enabled *bool
@@ -346,16 +370,8 @@ func ignoreMissingModules(ctx android.BottomUpMutatorContext, apiToCheck *ApiToC
 	apiToCheck.Removed_api_file = nil
 }
 
-// Used by xsd_config
 type ApiFilePath interface {
 	ApiFilePath() android.Path
-}
-
-// Provider of information about API stubs, used by java_sdk_library.
-type ApiStubsProvider interface {
-	ApiFilePath
-	RemovedApiFilePath() android.Path
-	StubsSrcJar() android.Path
 }
 
 //
@@ -702,9 +718,14 @@ type Droiddoc struct {
 
 	properties        DroiddocProperties
 	apiFile           android.WritablePath
+	dexApiFile        android.WritablePath
 	privateApiFile    android.WritablePath
+	privateDexApiFile android.WritablePath
 	removedApiFile    android.WritablePath
 	removedDexApiFile android.WritablePath
+	exactApiFile      android.WritablePath
+	apiMappingFile    android.WritablePath
+	proguardFile      android.WritablePath
 
 	checkCurrentApiTimestamp      android.WritablePath
 	updateCurrentApiTimestamp     android.WritablePath
@@ -842,9 +863,39 @@ func (d *Droiddoc) stubsFlags(ctx android.ModuleContext, cmd *android.RuleBuilde
 		cmd.FlagWithOutput("-removedApi ", d.removedApiFile)
 	}
 
+	if String(d.properties.Private_api_filename) != "" {
+		d.privateApiFile = android.PathForModuleOut(ctx, String(d.properties.Private_api_filename))
+		cmd.FlagWithOutput("-privateApi ", d.privateApiFile)
+	}
+
+	if String(d.properties.Dex_api_filename) != "" {
+		d.dexApiFile = android.PathForModuleOut(ctx, String(d.properties.Dex_api_filename))
+		cmd.FlagWithOutput("-dexApi ", d.dexApiFile)
+	}
+
+	if String(d.properties.Private_dex_api_filename) != "" {
+		d.privateDexApiFile = android.PathForModuleOut(ctx, String(d.properties.Private_dex_api_filename))
+		cmd.FlagWithOutput("-privateDexApi ", d.privateDexApiFile)
+	}
+
 	if String(d.properties.Removed_dex_api_filename) != "" {
 		d.removedDexApiFile = android.PathForModuleOut(ctx, String(d.properties.Removed_dex_api_filename))
 		cmd.FlagWithOutput("-removedDexApi ", d.removedDexApiFile)
+	}
+
+	if String(d.properties.Exact_api_filename) != "" {
+		d.exactApiFile = android.PathForModuleOut(ctx, String(d.properties.Exact_api_filename))
+		cmd.FlagWithOutput("-exactApi ", d.exactApiFile)
+	}
+
+	if String(d.properties.Dex_mapping_filename) != "" {
+		d.apiMappingFile = android.PathForModuleOut(ctx, String(d.properties.Dex_mapping_filename))
+		cmd.FlagWithOutput("-apiMapping ", d.apiMappingFile)
+	}
+
+	if String(d.properties.Proguard_filename) != "" {
+		d.proguardFile = android.PathForModuleOut(ctx, String(d.properties.Proguard_filename))
+		cmd.FlagWithOutput("-proguard ", d.proguardFile)
 	}
 
 	if BoolDefault(d.properties.Create_stubs, true) {
@@ -1146,9 +1197,14 @@ type Droidstubs struct {
 	apiFile                 android.WritablePath
 	apiXmlFile              android.WritablePath
 	lastReleasedApiXmlFile  android.WritablePath
+	dexApiFile              android.WritablePath
 	privateApiFile          android.WritablePath
+	privateDexApiFile       android.WritablePath
 	removedApiFile          android.WritablePath
 	removedDexApiFile       android.WritablePath
+	apiMappingFile          android.WritablePath
+	exactApiFile            android.WritablePath
+	proguardFile            android.WritablePath
 	nullabilityWarningsFile android.WritablePath
 
 	checkCurrentApiTimestamp      android.WritablePath
@@ -1203,29 +1259,11 @@ func (d *Droidstubs) ApiFilePath() android.Path {
 	return d.apiFilePath
 }
 
-func (d *Droidstubs) RemovedApiFilePath() android.Path {
-	return d.removedApiFile
-}
-
-func (d *Droidstubs) StubsSrcJar() android.Path {
-	return d.stubsSrcJar
-}
-
 func (d *Droidstubs) DepsMutator(ctx android.BottomUpMutatorContext) {
 	d.Javadoc.addDeps(ctx)
 
-	// If requested clear any properties that provide information about the latest version
-	// of an API and which reference non-existent modules.
 	if Bool(d.properties.Check_api.Ignore_missing_latest_api) {
 		ignoreMissingModules(ctx, &d.properties.Check_api.Last_released)
-
-		// If the new_since references a module, e.g. :module-latest-api and the module
-		// does not exist then clear it.
-		newSinceSrc := d.properties.Check_api.Api_lint.New_since
-		newSinceSrcModule := android.SrcIsModule(proptools.String(newSinceSrc))
-		if newSinceSrcModule != "" && !ctx.OtherModuleExists(newSinceSrcModule) {
-			d.properties.Check_api.Api_lint.New_since = nil
-		}
 	}
 
 	if len(d.properties.Merge_annotations_dirs) != 0 {
@@ -1247,7 +1285,7 @@ func (d *Droidstubs) DepsMutator(ctx android.BottomUpMutatorContext) {
 	}
 }
 
-func (d *Droidstubs) stubsFlags(ctx android.ModuleContext, cmd *android.RuleBuilderCommand, stubsDir android.OptionalPath) {
+func (d *Droidstubs) stubsFlags(ctx android.ModuleContext, cmd *android.RuleBuilderCommand, stubsDir android.WritablePath) {
 	if apiCheckEnabled(ctx, d.properties.Check_api.Current, "current") ||
 		apiCheckEnabled(ctx, d.properties.Check_api.Last_released, "last_released") ||
 		String(d.properties.Api_filename) != "" {
@@ -1263,9 +1301,39 @@ func (d *Droidstubs) stubsFlags(ctx android.ModuleContext, cmd *android.RuleBuil
 		cmd.FlagWithOutput("--removed-api ", d.removedApiFile)
 	}
 
+	if String(d.properties.Private_api_filename) != "" {
+		d.privateApiFile = android.PathForModuleOut(ctx, String(d.properties.Private_api_filename))
+		cmd.FlagWithOutput("--private-api ", d.privateApiFile)
+	}
+
+	if String(d.properties.Dex_api_filename) != "" {
+		d.dexApiFile = android.PathForModuleOut(ctx, String(d.properties.Dex_api_filename))
+		cmd.FlagWithOutput("--dex-api ", d.dexApiFile)
+	}
+
+	if String(d.properties.Private_dex_api_filename) != "" {
+		d.privateDexApiFile = android.PathForModuleOut(ctx, String(d.properties.Private_dex_api_filename))
+		cmd.FlagWithOutput("--private-dex-api ", d.privateDexApiFile)
+	}
+
 	if String(d.properties.Removed_dex_api_filename) != "" {
 		d.removedDexApiFile = android.PathForModuleOut(ctx, String(d.properties.Removed_dex_api_filename))
 		cmd.FlagWithOutput("--removed-dex-api ", d.removedDexApiFile)
+	}
+
+	if String(d.properties.Exact_api_filename) != "" {
+		d.exactApiFile = android.PathForModuleOut(ctx, String(d.properties.Exact_api_filename))
+		cmd.FlagWithOutput("--exact-api ", d.exactApiFile)
+	}
+
+	if String(d.properties.Dex_mapping_filename) != "" {
+		d.apiMappingFile = android.PathForModuleOut(ctx, String(d.properties.Dex_mapping_filename))
+		cmd.FlagWithOutput("--dex-api-mapping ", d.apiMappingFile)
+	}
+
+	if String(d.properties.Proguard_filename) != "" {
+		d.proguardFile = android.PathForModuleOut(ctx, String(d.properties.Proguard_filename))
+		cmd.FlagWithOutput("--proguard ", d.proguardFile)
 	}
 
 	if Bool(d.properties.Write_sdk_values) {
@@ -1273,13 +1341,11 @@ func (d *Droidstubs) stubsFlags(ctx android.ModuleContext, cmd *android.RuleBuil
 		cmd.FlagWithArg("--sdk-values ", d.metadataDir.String())
 	}
 
-	if stubsDir.Valid() {
-		if Bool(d.properties.Create_doc_stubs) {
-			cmd.FlagWithArg("--doc-stubs ", stubsDir.String())
-		} else {
-			cmd.FlagWithArg("--stubs ", stubsDir.String())
-			cmd.Flag("--exclude-documentation-from-stubs")
-		}
+	if Bool(d.properties.Create_doc_stubs) {
+		cmd.FlagWithArg("--doc-stubs ", stubsDir.String())
+	} else {
+		cmd.FlagWithArg("--stubs ", stubsDir.String())
+		cmd.Flag("--exclude-documentation-from-stubs")
 	}
 }
 
@@ -1400,32 +1466,7 @@ func metalavaCmd(ctx android.ModuleContext, rule *android.RuleBuilder, javaVersi
 	srcJarList android.Path, bootclasspath, classpath classpath, sourcepaths android.Paths) *android.RuleBuilderCommand {
 	// Metalava uses lots of memory, restrict the number of metalava jobs that can run in parallel.
 	rule.HighMem()
-	cmd := rule.Command()
-	if ctx.Config().IsEnvTrue("RBE_METALAVA") {
-		rule.Remoteable(android.RemoteRuleSupports{RBE: true})
-		execStrategy := remoteexec.LocalExecStrategy
-		if v := ctx.Config().Getenv("RBE_METALAVA_EXEC_STRATEGY"); v != "" {
-			execStrategy = v
-		}
-		pool := "metalava"
-		if v := ctx.Config().Getenv("RBE_METALAVA_POOL"); v != "" {
-			pool = v
-		}
-		inputs := []string{android.PathForOutput(ctx, "host", ctx.Config().PrebuiltOS(), "framework", "metalava.jar").String()}
-		inputs = append(inputs, sourcepaths.Strings()...)
-		if v := ctx.Config().Getenv("RBE_METALAVA_INPUTS"); v != "" {
-			inputs = append(inputs, strings.Split(v, ",")...)
-		}
-		cmd.Text((&remoteexec.REParams{
-			Labels:          map[string]string{"type": "compile", "lang": "java", "compiler": "metalava"},
-			ExecStrategy:    execStrategy,
-			Inputs:          inputs,
-			ToolchainInputs: []string{config.JavaCmd(ctx).String()},
-			Platform:        map[string]string{remoteexec.PoolKey: pool},
-		}).NoVarTemplate(ctx.Config()))
-	}
-
-	cmd.BuiltTool(ctx, "metalava").
+	cmd := rule.Command().BuiltTool(ctx, "metalava").
 		Flag(config.JavacVmFlags).
 		FlagWithArg("-encoding ", "UTF-8").
 		FlagWithArg("-source ", javaVersion.String()).
@@ -1461,18 +1502,15 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	// Create rule for metalava
 
+	d.Javadoc.stubsSrcJar = android.PathForModuleOut(ctx, ctx.ModuleName()+"-"+"stubs.srcjar")
+
 	srcJarDir := android.PathForModuleOut(ctx, "srcjars")
+	stubsDir := android.PathForModuleOut(ctx, "stubsDir")
 
 	rule := android.NewRuleBuilder()
 
-	generateStubs := BoolDefault(d.properties.Generate_stubs, true)
-	var stubsDir android.OptionalPath
-	if generateStubs {
-		d.Javadoc.stubsSrcJar = android.PathForModuleOut(ctx, ctx.ModuleName()+"-"+"stubs.srcjar")
-		stubsDir = android.OptionalPathForPath(android.PathForModuleOut(ctx, "stubsDir"))
-		rule.Command().Text("rm -rf").Text(stubsDir.String())
-		rule.Command().Text("mkdir -p").Text(stubsDir.String())
-	}
+	rule.Command().Text("rm -rf").Text(stubsDir.String())
+	rule.Command().Text("mkdir -p").Text(stubsDir.String())
 
 	srcJarList := zipSyncCmd(ctx, rule, srcJarDir, d.Javadoc.srcJars)
 
@@ -1498,113 +1536,13 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		cmd.ImplicitOutput(android.PathForModuleGen(ctx, o))
 	}
 
-	// Add options for the other optional tasks: API-lint and check-released.
-	// We generate separate timestamp files for them.
-
-	doApiLint := false
-	doCheckReleased := false
-
-	// Add API lint options.
-
-	if BoolDefault(d.properties.Check_api.Api_lint.Enabled, false) && !ctx.Config().IsPdkBuild() {
-		doApiLint = true
-
-		newSince := android.OptionalPathForModuleSrc(ctx, d.properties.Check_api.Api_lint.New_since)
-		if newSince.Valid() {
-			cmd.FlagWithInput("--api-lint ", newSince.Path())
-		} else {
-			cmd.Flag("--api-lint")
-		}
-		d.apiLintReport = android.PathForModuleOut(ctx, "api_lint_report.txt")
-		cmd.FlagWithOutput("--report-even-if-suppressed ", d.apiLintReport) // TODO:  Change to ":api-lint"
-
-		baselineFile := android.OptionalPathForModuleSrc(ctx, d.properties.Check_api.Api_lint.Baseline_file)
-		updatedBaselineOutput := android.PathForModuleOut(ctx, "api_lint_baseline.txt")
-		d.apiLintTimestamp = android.PathForModuleOut(ctx, "api_lint.timestamp")
-
-		// Note this string includes a special shell quote $' ... ', which decodes the "\n"s.
-		// However, because $' ... ' doesn't expand environmental variables, we can't just embed
-		// $PWD, so we have to terminate $'...', use "$PWD", then start $' ... ' again,
-		// which is why we have '"$PWD"$' in it.
-		//
-		// TODO: metalava also has a slightly different message hardcoded. Should we unify this
-		// message and metalava's one?
-		msg := `$'` + // Enclose with $' ... '
-			`************************************************************\n` +
-			`Your API changes are triggering API Lint warnings or errors.\n` +
-			`To make these errors go away, fix the code according to the\n` +
-			`error and/or warning messages above.\n` +
-			`\n` +
-			`If it is not possible to do so, there are workarounds:\n` +
-			`\n` +
-			`1. You can suppress the errors with @SuppressLint("<id>")\n`
-
-		if baselineFile.Valid() {
-			cmd.FlagWithInput("--baseline:api-lint ", baselineFile.Path())
-			cmd.FlagWithOutput("--update-baseline:api-lint ", updatedBaselineOutput)
-
-			msg += fmt.Sprintf(``+
-				`2. You can update the baseline by executing the following\n`+
-				`   command:\n`+
-				`       cp \\\n`+
-				`       "'"$PWD"$'/%s" \\\n`+
-				`       "'"$PWD"$'/%s"\n`+
-				`   To submit the revised baseline.txt to the main Android\n`+
-				`   repository, you will need approval.\n`, updatedBaselineOutput, baselineFile.Path())
-		} else {
-			msg += fmt.Sprintf(``+
-				`2. You can add a baseline file of existing lint failures\n`+
-				`   to the build rule of %s.\n`, d.Name())
-		}
-		// Note the message ends with a ' (single quote), to close the $' ... ' .
-		msg += `************************************************************\n'`
-
-		cmd.FlagWithArg("--error-message:api-lint ", msg)
-	}
-
-	// Add "check released" options. (Detect incompatible API changes from the last public release)
-
-	if apiCheckEnabled(ctx, d.properties.Check_api.Last_released, "last_released") &&
-		!ctx.Config().IsPdkBuild() {
-		doCheckReleased = true
-
-		if len(d.Javadoc.properties.Out) > 0 {
-			ctx.PropertyErrorf("out", "out property may not be combined with check_api")
-		}
-
-		apiFile := android.PathForModuleSrc(ctx, String(d.properties.Check_api.Last_released.Api_file))
-		removedApiFile := android.PathForModuleSrc(ctx, String(d.properties.Check_api.Last_released.Removed_api_file))
-		baselineFile := android.OptionalPathForModuleSrc(ctx, d.properties.Check_api.Last_released.Baseline_file)
-		updatedBaselineOutput := android.PathForModuleOut(ctx, "last_released_baseline.txt")
-
-		d.checkLastReleasedApiTimestamp = android.PathForModuleOut(ctx, "check_last_released_api.timestamp")
-
-		cmd.FlagWithInput("--check-compatibility:api:released ", apiFile)
-		cmd.FlagWithInput("--check-compatibility:removed:released ", removedApiFile)
-
-		if baselineFile.Valid() {
-			cmd.FlagWithInput("--baseline:compatibility:released ", baselineFile.Path())
-			cmd.FlagWithOutput("--update-baseline:compatibility:released ", updatedBaselineOutput)
-		}
-
-		// Note this string includes quote ($' ... '), which decodes the "\n"s.
-		msg := `$'\n******************************\n` +
-			`You have tried to change the API from what has been previously released in\n` +
-			`an SDK.  Please fix the errors listed above.\n` +
-			`******************************\n'`
-
-		cmd.FlagWithArg("--error-message:compatibility:released ", msg)
-	}
-
-	if generateStubs {
-		rule.Command().
-			BuiltTool(ctx, "soong_zip").
-			Flag("-write_if_changed").
-			Flag("-jar").
-			FlagWithOutput("-o ", d.Javadoc.stubsSrcJar).
-			FlagWithArg("-C ", stubsDir.String()).
-			FlagWithArg("-D ", stubsDir.String())
-	}
+	rule.Command().
+		BuiltTool(ctx, "soong_zip").
+		Flag("-write_if_changed").
+		Flag("-jar").
+		FlagWithOutput("-o ", d.Javadoc.stubsSrcJar).
+		FlagWithArg("-C ", stubsDir.String()).
+		FlagWithArg("-D ", stubsDir.String())
 
 	if Bool(d.properties.Write_sdk_values) {
 		d.metadataZip = android.PathForModuleOut(ctx, ctx.ModuleName()+"-metadata.zip")
@@ -1617,20 +1555,66 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			FlagWithArg("-D ", d.metadataDir.String())
 	}
 
-	// TODO: We don't really need two separate API files, but this is a reminiscence of how
-	// we used to run metalava separately for API lint and the "last_released" check. Unify them.
-	if doApiLint {
-		rule.Command().Text("touch").Output(d.apiLintTimestamp)
-	}
-	if doCheckReleased {
-		rule.Command().Text("touch").Output(d.checkLastReleasedApiTimestamp)
-	}
-
 	rule.Restat()
 
 	zipSyncCleanupCmd(rule, srcJarDir)
 
-	rule.Build(pctx, ctx, "metalava", "metalava merged")
+	rule.Build(pctx, ctx, "metalava", "metalava")
+
+	// Create rule for apicheck
+
+	if BoolDefault(d.properties.Check_api.Api_lint.Enabled, false) && !ctx.Config().IsPdkBuild() {
+		rule := android.NewRuleBuilder()
+		rule.Command().Text("( true")
+
+		srcJarDir := android.PathForModuleOut(ctx, "api_lint", "srcjars")
+		srcJarList := zipSyncCmd(ctx, rule, srcJarDir, d.Javadoc.srcJars)
+
+		cmd := metalavaCmd(ctx, rule, javaVersion, d.Javadoc.srcFiles, srcJarList,
+			deps.bootClasspath, deps.classpath, d.Javadoc.sourcepaths)
+
+		cmd.Flag(d.Javadoc.args).Implicits(d.Javadoc.argFiles)
+
+		newSince := android.OptionalPathForModuleSrc(ctx, d.properties.Check_api.Api_lint.New_since)
+		if newSince.Valid() {
+			cmd.FlagWithInput("--api-lint ", newSince.Path())
+		} else {
+			cmd.Flag("--api-lint")
+		}
+		d.apiLintReport = android.PathForModuleOut(ctx, "api_lint_report.txt")
+		cmd.FlagWithOutput("--report-even-if-suppressed ", d.apiLintReport)
+
+		d.inclusionAnnotationsFlags(ctx, cmd)
+		d.mergeAnnoDirFlags(ctx, cmd)
+
+		baselineFile := android.OptionalPathForModuleSrc(ctx, d.properties.Check_api.Api_lint.Baseline_file)
+		updatedBaselineOutput := android.PathForModuleOut(ctx, "api_lint_baseline.txt")
+		d.apiLintTimestamp = android.PathForModuleOut(ctx, "api_lint.timestamp")
+
+		if baselineFile.Valid() {
+			cmd.FlagWithInput("--baseline ", baselineFile.Path())
+			cmd.FlagWithOutput("--update-baseline ", updatedBaselineOutput)
+		}
+
+		zipSyncCleanupCmd(rule, srcJarDir)
+
+		msg := fmt.Sprintf(`\n******************************\n`+
+			`Your API changes are triggering API Lint warnings or errors.\n\n`+
+			`To make these errors go away, you have two choices:\n`+
+			`   1. You can suppress the errors with @SuppressLint(\"<id>\").\n\n`+
+			`   2. You can update the baseline by executing the following command:\n`+
+			`         cp \"$PWD/%s\" \"$PWD/%s\"\n\n`+
+			`******************************\n`, updatedBaselineOutput, baselineFile.Path())
+		rule.Command().
+			Text("touch").Output(d.apiLintTimestamp).
+			Text(") || (").
+			Text("echo").Flag("-e").Flag(`"` + msg + `"`).
+			Text("; exit 38").
+			Text(")")
+
+		rule.Build(pctx, ctx, "metalavaApiLint", "metalava API lint")
+
+	}
 
 	if apiCheckEnabled(ctx, d.properties.Check_api.Current, "current") &&
 		!ctx.Config().IsPdkBuild() {
@@ -1642,35 +1626,40 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		apiFile := android.PathForModuleSrc(ctx, String(d.properties.Check_api.Current.Api_file))
 		removedApiFile := android.PathForModuleSrc(ctx, String(d.properties.Check_api.Current.Removed_api_file))
 		baselineFile := android.OptionalPathForModuleSrc(ctx, d.properties.Check_api.Current.Baseline_file)
-
-		if baselineFile.Valid() {
-			ctx.PropertyErrorf("baseline_file", "current API check can't have a baseline file. (module %s)", ctx.ModuleName())
-		}
+		updatedBaselineOutput := android.PathForModuleOut(ctx, "current_baseline.txt")
 
 		d.checkCurrentApiTimestamp = android.PathForModuleOut(ctx, "check_current_api.timestamp")
 
 		rule := android.NewRuleBuilder()
 
-		// Diff command line.
-		// -F matches the closest "opening" line, such as "package android {"
-		// and "  public class Intent {".
-		diff := `diff -u -F '{ *$'`
-
 		rule.Command().Text("( true")
-		rule.Command().
-			Text(diff).
-			Input(apiFile).Input(d.apiFile)
 
-		rule.Command().
-			Text(diff).
-			Input(removedApiFile).Input(d.removedApiFile)
+		srcJarDir := android.PathForModuleOut(ctx, "current-apicheck", "srcjars")
+		srcJarList := zipSyncCmd(ctx, rule, srcJarDir, d.Javadoc.srcJars)
+
+		cmd := metalavaCmd(ctx, rule, javaVersion, d.Javadoc.srcFiles, srcJarList,
+			deps.bootClasspath, deps.classpath, d.Javadoc.sourcepaths)
+
+		cmd.Flag(d.Javadoc.args).Implicits(d.Javadoc.argFiles).
+			FlagWithInput("--check-compatibility:api:current ", apiFile).
+			FlagWithInput("--check-compatibility:removed:current ", removedApiFile)
+
+		d.inclusionAnnotationsFlags(ctx, cmd)
+		d.mergeAnnoDirFlags(ctx, cmd)
+
+		if baselineFile.Valid() {
+			cmd.FlagWithInput("--baseline ", baselineFile.Path())
+			cmd.FlagWithOutput("--update-baseline ", updatedBaselineOutput)
+		}
+
+		zipSyncCleanupCmd(rule, srcJarDir)
 
 		msg := fmt.Sprintf(`\n******************************\n`+
 			`You have tried to change the API from what has been previously approved.\n\n`+
 			`To make these errors go away, you have two choices:\n`+
-			`   1. You can add '@hide' javadoc comments (and remove @SystemApi/@TestApi/etc)\n`+
-			`      to the new methods, etc. shown in the above diff.\n\n`+
-			`   2. You can update current.txt and/or removed.txt by executing the following command:\n`+
+			`   1. You can add '@hide' javadoc comments to the methods, etc. listed in the\n`+
+			`      errors above.\n\n`+
+			`   2. You can update current.txt by executing the following command:\n`+
 			`         make %s-update-current-api\n\n`+
 			`      To submit the revised current.txt to the main Android repository,\n`+
 			`      you will need approval.\n`+
@@ -1683,7 +1672,7 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			Text("; exit 38").
 			Text(")")
 
-		rule.Build(pctx, ctx, "metalavaCurrentApiCheck", "check current API")
+		rule.Build(pctx, ctx, "metalavaCurrentApiCheck", "metalava check current API")
 
 		d.updateCurrentApiTimestamp = android.PathForModuleOut(ctx, "update_current_api.timestamp")
 
@@ -1710,6 +1699,60 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			Text(")")
 
 		rule.Build(pctx, ctx, "metalavaCurrentApiUpdate", "update current API")
+	}
+
+	if apiCheckEnabled(ctx, d.properties.Check_api.Last_released, "last_released") &&
+		!ctx.Config().IsPdkBuild() {
+
+		if len(d.Javadoc.properties.Out) > 0 {
+			ctx.PropertyErrorf("out", "out property may not be combined with check_api")
+		}
+
+		apiFile := android.PathForModuleSrc(ctx, String(d.properties.Check_api.Last_released.Api_file))
+		removedApiFile := android.PathForModuleSrc(ctx, String(d.properties.Check_api.Last_released.Removed_api_file))
+		baselineFile := android.OptionalPathForModuleSrc(ctx, d.properties.Check_api.Last_released.Baseline_file)
+		updatedBaselineOutput := android.PathForModuleOut(ctx, "last_released_baseline.txt")
+
+		d.checkLastReleasedApiTimestamp = android.PathForModuleOut(ctx, "check_last_released_api.timestamp")
+
+		rule := android.NewRuleBuilder()
+
+		rule.Command().Text("( true")
+
+		srcJarDir := android.PathForModuleOut(ctx, "last-apicheck", "srcjars")
+		srcJarList := zipSyncCmd(ctx, rule, srcJarDir, d.Javadoc.srcJars)
+
+		cmd := metalavaCmd(ctx, rule, javaVersion, d.Javadoc.srcFiles, srcJarList,
+			deps.bootClasspath, deps.classpath, d.Javadoc.sourcepaths)
+
+		cmd.Flag(d.Javadoc.args).Implicits(d.Javadoc.argFiles).
+			FlagWithInput("--check-compatibility:api:released ", apiFile)
+
+		d.inclusionAnnotationsFlags(ctx, cmd)
+
+		cmd.FlagWithInput("--check-compatibility:removed:released ", removedApiFile)
+
+		d.mergeAnnoDirFlags(ctx, cmd)
+
+		if baselineFile.Valid() {
+			cmd.FlagWithInput("--baseline ", baselineFile.Path())
+			cmd.FlagWithOutput("--update-baseline ", updatedBaselineOutput)
+		}
+
+		zipSyncCleanupCmd(rule, srcJarDir)
+
+		msg := `\n******************************\n` +
+			`You have tried to change the API from what has been previously released in\n` +
+			`an SDK.  Please fix the errors listed above.\n` +
+			`******************************\n`
+		rule.Command().
+			Text("touch").Output(d.checkLastReleasedApiTimestamp).
+			Text(") || (").
+			Text("echo").Flag("-e").Flag(`"` + msg + `"`).
+			Text("; exit 38").
+			Text(")")
+
+		rule.Build(pctx, ctx, "metalavaLastApiCheck", "metalava check last API")
 	}
 
 	if String(d.properties.Check_nullability_warnings) != "" {
@@ -1998,33 +2041,18 @@ func (mt *droidStubsSdkMemberType) IsInstance(module android.Module) bool {
 	return ok
 }
 
-func (mt *droidStubsSdkMemberType) AddPrebuiltModule(ctx android.SdkMemberContext, member android.SdkMember) android.BpModule {
-	return ctx.SnapshotBuilder().AddPrebuiltModule(member, "prebuilt_stubs_sources")
-}
-
-func (mt *droidStubsSdkMemberType) CreateVariantPropertiesStruct() android.SdkMemberProperties {
-	return &droidStubsInfoProperties{}
-}
-
-type droidStubsInfoProperties struct {
-	android.SdkMemberPropertiesBase
-
-	StubsSrcJar android.Path
-}
-
-func (p *droidStubsInfoProperties) PopulateFromVariant(ctx android.SdkMemberContext, variant android.Module) {
-	droidstubs := variant.(*Droidstubs)
-	p.StubsSrcJar = droidstubs.stubsSrcJar
-}
-
-func (p *droidStubsInfoProperties) AddToPropertySet(ctx android.SdkMemberContext, propertySet android.BpPropertySet) {
-	if p.StubsSrcJar != nil {
-		builder := ctx.SnapshotBuilder()
-
-		snapshotRelativeDir := filepath.Join("java", ctx.Name()+"_stubs_sources")
-
-		builder.UnzipToSnapshot(p.StubsSrcJar, snapshotRelativeDir)
-
-		propertySet.AddProperty("srcs", []string{snapshotRelativeDir})
+func (mt *droidStubsSdkMemberType) BuildSnapshot(sdkModuleContext android.ModuleContext, builder android.SnapshotBuilder, member android.SdkMember) {
+	variants := member.Variants()
+	if len(variants) != 1 {
+		sdkModuleContext.ModuleErrorf("sdk contains %d variants of member %q but only one is allowed", len(variants), member.Name())
 	}
+	variant := variants[0]
+	d, _ := variant.(*Droidstubs)
+	stubsSrcJar := d.stubsSrcJar
+
+	snapshotRelativeDir := filepath.Join("java", d.Name()+"_stubs_sources")
+	builder.UnzipToSnapshot(stubsSrcJar, snapshotRelativeDir)
+
+	pbm := builder.AddPrebuiltModule(member, "prebuilt_stubs_sources")
+	pbm.AddProperty("srcs", []string{snapshotRelativeDir})
 }

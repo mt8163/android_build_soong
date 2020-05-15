@@ -136,11 +136,8 @@ func kotlinKapt(ctx android.ModuleContext, outputFile android.WritablePath,
 	kaptProcessorPath := flags.processorPath.FormRepeatedClassPath("-P plugin:org.jetbrains.kotlin.kapt3:apclasspath=")
 
 	kaptProcessor := ""
-	for i, p := range flags.processors {
-		if i > 0 {
-			kaptProcessor += " "
-		}
-		kaptProcessor += "-P plugin:org.jetbrains.kotlin.kapt3:processors=" + p
+	if flags.processor != "" {
+		kaptProcessor = "-P plugin:org.jetbrains.kotlin.kapt3:processors=" + flags.processor
 	}
 
 	encodedJavacFlags := kaptEncodeFlags([][2]string{

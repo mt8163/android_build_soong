@@ -67,20 +67,6 @@ func GatherRequiredDepsForTest(oses ...android.OsType) string {
 			src: "",
 		}
 
-		cc_prebuilt_library_shared {
-			name: "libclang_rt.hwasan-aarch64-android",
-			nocrt: true,
-			vendor_available: true,
-			recovery_available: true,
-			system_shared_libs: [],
-			stl: "none",
-			srcs: [""],
-			check_elf_files: false,
-			sanitize: {
-				never: true,
-			},
-		}
-
 		toolchain_library {
 			name: "libclang_rt.builtins-i686-android",
 			vendor_available: true,
@@ -152,7 +138,6 @@ func GatherRequiredDepsForTest(oses ...android.OsType) string {
 			name: "libgcc_stripped",
 			vendor_available: true,
 			recovery_available: true,
-			sdk_version: "current",
 			src: "",
 		}
 
@@ -170,7 +155,6 @@ func GatherRequiredDepsForTest(oses ...android.OsType) string {
 		llndk_library {
 			name: "libc",
 			symbol_file: "",
-			sdk_version: "current",
 		}
 		cc_library {
 			name: "libm",
@@ -190,47 +174,7 @@ func GatherRequiredDepsForTest(oses ...android.OsType) string {
 		llndk_library {
 			name: "libm",
 			symbol_file: "",
-			sdk_version: "current",
 		}
-
-		// Coverage libraries
-		cc_library {
-			name: "libprofile-extras",
-			vendor_available: true,
-			recovery_available: true,
-			native_coverage: false,
-			system_shared_libs: [],
-			stl: "none",
-			notice: "custom_notice",
-		}
-		cc_library {
-			name: "libprofile-clang-extras",
-			vendor_available: true,
-			recovery_available: true,
-			native_coverage: false,
-			system_shared_libs: [],
-			stl: "none",
-			notice: "custom_notice",
-		}
-		cc_library {
-			name: "libprofile-extras_ndk",
-			vendor_available: true,
-			native_coverage: false,
-			system_shared_libs: [],
-			stl: "none",
-			notice: "custom_notice",
-			sdk_version: "current",
-		}
-		cc_library {
-			name: "libprofile-clang-extras_ndk",
-			vendor_available: true,
-			native_coverage: false,
-			system_shared_libs: [],
-			stl: "none",
-			notice: "custom_notice",
-			sdk_version: "current",
-		}
-
 		cc_library {
 			name: "libdl",
 			no_libcrt: true,
@@ -249,7 +193,6 @@ func GatherRequiredDepsForTest(oses ...android.OsType) string {
 		llndk_library {
 			name: "libdl",
 			symbol_file: "",
-			sdk_version: "current",
 		}
 		cc_library {
 			name: "libft2",
@@ -262,7 +205,6 @@ func GatherRequiredDepsForTest(oses ...android.OsType) string {
 			name: "libft2",
 			symbol_file: "",
 			vendor_available: false,
-			sdk_version: "current",
 		}
 		cc_library {
 			name: "libc++_static",
@@ -273,10 +215,6 @@ func GatherRequiredDepsForTest(oses ...android.OsType) string {
 			vendor_available: true,
 			recovery_available: true,
 			host_supported: true,
-			apex_available: [
-				"//apex_available:platform",
-				"//apex_available:anyapex",
-			],
 		}
 		cc_library {
 			name: "libc++",
@@ -305,10 +243,6 @@ func GatherRequiredDepsForTest(oses ...android.OsType) string {
 			host_supported: false,
 			vendor_available: true,
 			recovery_available: true,
-			apex_available: [
-				"//apex_available:platform",
-				"//apex_available:anyapex",
-			],
 		}
 		cc_library {
 			name: "libunwind_llvm",
@@ -320,21 +254,8 @@ func GatherRequiredDepsForTest(oses ...android.OsType) string {
 			recovery_available: true,
 		}
 
-		cc_defaults {
-			name: "crt_defaults",
-			recovery_available: true,
-			vendor_available: true,
-			native_bridge_supported: true,
-			stl: "none",
-			apex_available: [
-				"//apex_available:platform",
-				"//apex_available:anyapex",
-			],
-		}
-
 		cc_object {
 			name: "crtbegin_so",
-			defaults: ["crt_defaults"],
 			recovery_available: true,
 			vendor_available: true,
 			native_bridge_supported: true,
@@ -343,7 +264,6 @@ func GatherRequiredDepsForTest(oses ...android.OsType) string {
 
 		cc_object {
 			name: "crtbegin_dynamic",
-			defaults: ["crt_defaults"],
 			recovery_available: true,
 			vendor_available: true,
 			native_bridge_supported: true,
@@ -352,7 +272,6 @@ func GatherRequiredDepsForTest(oses ...android.OsType) string {
 
 		cc_object {
 			name: "crtbegin_static",
-			defaults: ["crt_defaults"],
 			recovery_available: true,
 			vendor_available: true,
 			native_bridge_supported: true,
@@ -361,7 +280,6 @@ func GatherRequiredDepsForTest(oses ...android.OsType) string {
 
 		cc_object {
 			name: "crtend_so",
-			defaults: ["crt_defaults"],
 			recovery_available: true,
 			vendor_available: true,
 			native_bridge_supported: true,
@@ -370,7 +288,6 @@ func GatherRequiredDepsForTest(oses ...android.OsType) string {
 
 		cc_object {
 			name: "crtend_android",
-			defaults: ["crt_defaults"],
 			recovery_available: true,
 			vendor_available: true,
 			native_bridge_supported: true,
@@ -416,16 +333,6 @@ func GatherRequiredDepsForTest(oses ...android.OsType) string {
 
 		ndk_prebuilt_object {
 			name: "ndk_crtend_so.27",
-			sdk_version: "27",
-		}
-
-		ndk_prebuilt_object {
-			name: "ndk_crtbegin_dynamic.27",
-			sdk_version: "27",
-		}
-
-		ndk_prebuilt_object {
-			name: "ndk_crtend_android.27",
 			sdk_version: "27",
 		}
 
@@ -524,8 +431,8 @@ func CreateTestContext() *android.TestContext {
 	ctx.RegisterModuleType("filegroup", android.FileGroupFactory)
 	ctx.RegisterModuleType("vndk_prebuilt_shared", VndkPrebuiltSharedFactory)
 	ctx.RegisterModuleType("vndk_libraries_txt", VndkLibrariesTxtFactory)
-	ctx.PreArchMutators(android.RegisterDefaultsPreArchMutators)
 	RegisterRequiredBuildComponentsForTest(ctx)
+	ctx.PreArchMutators(android.RegisterDefaultsPreArchMutators)
 	ctx.RegisterSingletonType("vndk-snapshot", VndkSnapshotSingleton)
 	ctx.RegisterSingletonType("vendor-snapshot", VendorSnapshotSingleton)
 

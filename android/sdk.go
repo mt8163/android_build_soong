@@ -22,30 +22,17 @@ import (
 	"github.com/google/blueprint/proptools"
 )
 
-// Extracted from SdkAware to make it easier to define custom subsets of the
-// SdkAware interface and improve code navigation within the IDE.
-//
-// In addition to its use in SdkAware this interface must also be implemented by
-// APEX to specify the SDKs required by that module and its contents. e.g. APEX
-// is expected to implement RequiredSdks() by reading its own properties like
-// `uses_sdks`.
-type RequiredSdks interface {
-	// The set of SDKs required by an APEX and its contents.
-	RequiredSdks() SdkRefs
-}
-
 // SdkAware is the interface that must be supported by any module to become a member of SDK or to be
 // built with SDK
 type SdkAware interface {
 	Module
-	RequiredSdks
-
 	sdkBase() *SdkBase
 	MakeMemberOf(sdk SdkRef)
 	IsInAnySdk() bool
 	ContainingSdk() SdkRef
 	MemberName() string
 	BuildWithSdks(sdks SdkRefs)
+	RequiredSdks() SdkRefs
 }
 
 // SdkRef refers to a version of an SDK
@@ -156,6 +143,10 @@ func (s *SdkBase) BuildWithSdks(sdks SdkRefs) {
 // RequiredSdks returns the SDK(s) that this module has to be built with
 func (s *SdkBase) RequiredSdks() SdkRefs {
 	return s.properties.RequiredSdks
+}
+
+func (s *SdkBase) BuildSnapshot(sdkModuleContext ModuleContext, builder SnapshotBuilder) {
+	sdkModuleContext.ModuleErrorf("module type " + sdkModuleContext.OtherModuleType(s.module) + " cannot be used in an sdk")
 }
 
 // InitSdkAwareModule initializes the SdkBase struct. This must be called by all modules including
@@ -313,11 +304,10 @@ type SdkMemberType interface {
 	// SdkAware and be added with an SdkMemberTypeDependencyTag tag.
 	HasTransitiveSdkMembers() bool
 
-	// Add dependencies from the SDK module to all the module variants the member
-	// type contributes to the SDK. `names` is the list of module names given in
-	// the member type property (as returned by SdkPropertyName()) in the SDK
-	// module. The exact set of variants required is determined by the SDK and its
-	// properties. The dependencies must be added with the supplied tag.
+	// Add dependencies from the SDK module to all the variants the member
+	// contributes to the SDK. The exact set of variants required is determined
+	// by the SDK and its properties. The dependencies must be added with the
+	// supplied tag.
 	//
 	// The BottomUpMutatorContext provided is for the SDK module.
 	AddDependencies(mctx BottomUpMutatorContext, dependencyTag blueprint.DependencyTag, names []string)
@@ -329,9 +319,26 @@ type SdkMemberType interface {
 	// the module is not allowed in whichever sdk property it was added.
 	IsInstance(module Module) bool
 
+	// Build the snapshot for the SDK member
+	//
+	// The ModuleContext provided is for the SDK module, so information for
+	// variants in the supplied member can be accessed using the Other... methods.
+	//
+	// The SdkMember is guaranteed to contain variants for which the
+	// IsInstance(Module) method returned true.
+	//
+	// deprecated Use AddPrebuiltModule() instead.
+	BuildSnapshot(sdkModuleContext ModuleContext, builder SnapshotBuilder, member SdkMember)
+
 	// Add a prebuilt module that the sdk will populate.
 	//
-	// The sdk module code generates the snapshot as follows:
+	// Returning nil from this will cause the sdk module type to use the deprecated BuildSnapshot
+	// method to build the snapshot. That method is deprecated because it requires the SdkMemberType
+	// implementation to do all the word.
+	//
+	// Otherwise, returning a non-nil value from this will cause the sdk module type to do the
+	// majority of the work to generate the snapshot. The sdk module code generates the snapshot
+	// as follows:
 	//
 	// * A properties struct of type SdkMemberProperties is created for each variant and
 	//   populated with information from the variant by calling PopulateFromVariant(SdkAware)
@@ -342,29 +349,14 @@ type SdkMemberType interface {
 	//
 	// * The variant property structs are analysed to find exported (capitalized) fields which
 	//   have common values. Those fields are cleared and the common value added to the common
-	//   properties.
-	//
-	//   A field annotated with a tag of `sdk:"keep"` will be treated as if it
+	//   properties. A field annotated with a tag of `sdk:"keep"` will be treated as if it
 	//   was not capitalized, i.e. not optimized for common values.
-	//
-	//   A field annotated with a tag of `android:"arch_variant"` will be allowed to have
-	//   values that differ by arch, fields not tagged as such must have common values across
-	//   all variants.
-	//
-	// * Additional field tags can be specified on a field that will ignore certain values
-	//   for the purpose of common value optimization. A value that is ignored must have the
-	//   default value for the property type. This is to ensure that significant value are not
-	//   ignored by accident. The purpose of this is to allow the snapshot generation to reflect
-	//   the behavior of the runtime. e.g. if a property is ignored on the host then a property
-	//   that is common for android can be treated as if it was common for android and host as
-	//   the setting for host is ignored anyway.
-	//   * `sdk:"ignored-on-host" - this indicates the property is ignored on the host variant.
 	//
 	// * The sdk module type populates the BpModule structure, creating the arch specific
 	//   structure and calls AddToPropertySet(...) on the properties struct to add the member
 	//   specific properties in the correct place in the structure.
 	//
-	AddPrebuiltModule(ctx SdkMemberContext, member SdkMember) BpModule
+	AddPrebuiltModule(sdkModuleContext ModuleContext, builder SnapshotBuilder, member SdkMember) BpModule
 
 	// Create a structure into which variant specific properties can be added.
 	CreateVariantPropertiesStruct() SdkMemberProperties
@@ -387,6 +379,19 @@ func (b *SdkMemberTypeBase) UsableWithSdkAndSdkSnapshot() bool {
 
 func (b *SdkMemberTypeBase) HasTransitiveSdkMembers() bool {
 	return b.TransitiveSdkMembers
+}
+
+func (b *SdkMemberTypeBase) BuildSnapshot(sdkModuleContext ModuleContext, builder SnapshotBuilder, member SdkMember) {
+	panic("override AddPrebuiltModule")
+}
+
+func (b *SdkMemberTypeBase) AddPrebuiltModule(sdkModuleContext ModuleContext, builder SnapshotBuilder, member SdkMember) BpModule {
+	// Returning nil causes the legacy BuildSnapshot method to be used.
+	return nil
+}
+
+func (b *SdkMemberTypeBase) CreateVariantPropertiesStruct() SdkMemberProperties {
+	panic("override me")
 }
 
 // Encapsulates the information about registered SdkMemberTypes.
@@ -460,29 +465,14 @@ func RegisterSdkMemberType(memberType SdkMemberType) {
 // Contains common properties that apply across many different member types. These
 // are not affected by the optimization to extract common values.
 type SdkMemberPropertiesBase struct {
+	// The setting to use for the compile_multilib property.
+	Compile_multilib string `sdk:"keep"`
+
 	// The number of unique os types supported by the member variants.
-	//
-	// If a member has a variant with more than one os type then it will need to differentiate
-	// the locations of any of their prebuilt files in the snapshot by os type to prevent them
-	// from colliding. See OsPrefix().
-	//
-	// This property is the same for all variants of a member and so would be optimized away
-	// if it was not explicitly kept.
 	Os_count int `sdk:"keep"`
 
 	// The os type for which these properties refer.
-	//
-	// Provided to allow a member to differentiate between os types in the locations of their
-	// prebuilt files when it supports more than one os type.
-	//
-	// This property is the same for all os type specific variants of a member and so would be
-	// optimized away if it was not explicitly kept.
 	Os OsType `sdk:"keep"`
-
-	// The setting to use for the compile_multilib property.
-	//
-	// This property is set after optimization so there is no point in trying to optimize it.
-	Compile_multilib string `sdk:"keep"`
 }
 
 // The os prefix to use for any file paths in the sdk.
@@ -510,28 +500,9 @@ type SdkMemberProperties interface {
 	// Access the base structure.
 	Base() *SdkMemberPropertiesBase
 
-	// Populate this structure with information from the variant.
-	PopulateFromVariant(ctx SdkMemberContext, variant Module)
+	// Populate the structure with information from the variant.
+	PopulateFromVariant(variant SdkAware)
 
-	// Add the information from this structure to the property set.
-	AddToPropertySet(ctx SdkMemberContext, propertySet BpPropertySet)
-}
-
-// Provides access to information common to a specific member.
-type SdkMemberContext interface {
-
-	// The module context of the sdk common os variant which is creating the snapshot.
-	SdkModuleContext() ModuleContext
-
-	// The builder of the snapshot.
-	SnapshotBuilder() SnapshotBuilder
-
-	// The type of the member.
-	MemberType() SdkMemberType
-
-	// The name of the member.
-	//
-	// Provided for use by sdk members to create a member specific location within the snapshot
-	// into which to copy the prebuilt files.
-	Name() string
+	// Add the information from the structure to the property set.
+	AddToPropertySet(sdkModuleContext ModuleContext, builder SnapshotBuilder, propertySet BpPropertySet)
 }

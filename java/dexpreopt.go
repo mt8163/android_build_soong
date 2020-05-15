@@ -62,10 +62,6 @@ type DexpreoptProperties struct {
 	}
 }
 
-func init() {
-	dexpreopt.DexpreoptRunningInSoong = true
-}
-
 func (d *dexpreopter) dexpreoptDisabled(ctx android.BaseModuleContext) bool {
 	global := dexpreopt.GetGlobalConfig(ctx)
 
@@ -131,8 +127,7 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, dexJarFile android.Mo
 	global := dexpreopt.GetGlobalConfig(ctx)
 	bootImage := defaultBootImageConfig(ctx)
 	dexFiles := bootImage.dexPathsDeps.Paths()
-	// The dex locations for all Android variants are identical.
-	dexLocations := bootImage.getAnyAndroidVariant().dexLocationsDeps
+	dexLocations := bootImage.dexLocationsDeps
 	if global.UseArtImage {
 		bootImage = artBootImageConfig(ctx)
 	}
@@ -160,8 +155,6 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, dexJarFile android.Mo
 		images = append(images, variant.images)
 		imagesDeps = append(imagesDeps, variant.imagesDeps)
 	}
-	// The image locations for all Android variants are identical.
-	imageLocations := bootImage.getAnyAndroidVariant().imageLocations()
 
 	dexLocation := android.InstallPathToOnDevicePath(ctx, d.installPath)
 
@@ -205,7 +198,7 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, dexJarFile android.Mo
 		Archs:                   archs,
 		DexPreoptImages:         images,
 		DexPreoptImagesDeps:     imagesDeps,
-		DexPreoptImageLocations: imageLocations,
+		DexPreoptImageLocations: bootImage.imageLocations,
 
 		PreoptBootClassPathDexFiles:     dexFiles,
 		PreoptBootClassPathDexLocations: dexLocations,

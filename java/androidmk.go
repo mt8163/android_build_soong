@@ -72,7 +72,6 @@ func (library *Library) AndroidMkEntries() []android.AndroidMkEntries {
 	if !hideFromMake {
 		mainEntries = android.AndroidMkEntries{
 			Class:      "JAVA_LIBRARIES",
-			DistFile:   android.OptionalPathForPath(library.distFile),
 			OutputFile: android.OptionalPathForPath(library.outputFile),
 			Include:    "$(BUILD_SYSTEM)/soong_java_prebuilt.mk",
 			ExtraEntries: []android.AndroidMkExtraEntriesFunc{
@@ -276,7 +275,7 @@ func (binary *Binary) AndroidMkEntries() []android.AndroidMkEntries {
 }
 
 func (app *AndroidApp) AndroidMkEntries() []android.AndroidMkEntries {
-	if !app.IsForPlatform() || app.appProperties.HideFromMake {
+	if !app.IsForPlatform() {
 		return []android.AndroidMkEntries{android.AndroidMkEntries{
 			Disabled: true,
 		}}
@@ -289,7 +288,6 @@ func (app *AndroidApp) AndroidMkEntries() []android.AndroidMkEntries {
 			func(entries *android.AndroidMkEntries) {
 				// App module names can be overridden.
 				entries.SetString("LOCAL_MODULE", app.installApkName)
-				entries.SetBoolIfTrue("LOCAL_UNINSTALLABLE_MODULE", app.appProperties.PreventInstall)
 				entries.SetPath("LOCAL_SOONG_RESOURCE_EXPORT_PACKAGE", app.exportPackage)
 				if app.dexJarFile != nil {
 					entries.SetPath("LOCAL_SOONG_DEX_JAR", app.dexJarFile)
@@ -348,9 +346,6 @@ func (app *AndroidApp) AndroidMkEntries() []android.AndroidMkEntries {
 
 				for _, jniLib := range app.installJniLibs {
 					entries.AddStrings("LOCAL_SOONG_JNI_LIBS_"+jniLib.target.Arch.ArchType.String(), jniLib.name)
-				}
-				if len(app.jniCoverageOutputs) > 0 {
-					entries.AddStrings("LOCAL_PREBUILT_COVERAGE_ARCHIVE", app.jniCoverageOutputs.Strings()...)
 				}
 				if len(app.dexpreopter.builtInstalled) > 0 {
 					entries.SetString("LOCAL_SOONG_BUILT_INSTALLED", app.dexpreopter.builtInstalled)
@@ -472,6 +467,34 @@ func (ddoc *Droiddoc) AndroidMkEntries() []android.AndroidMkEntries {
 				if ddoc.Javadoc.stubsSrcJar != nil {
 					entries.SetPath("LOCAL_DROIDDOC_STUBS_SRCJAR", ddoc.Javadoc.stubsSrcJar)
 				}
+				apiFilePrefix := "INTERNAL_PLATFORM_"
+				if String(ddoc.properties.Api_tag_name) != "" {
+					apiFilePrefix += String(ddoc.properties.Api_tag_name) + "_"
+				}
+				if ddoc.apiFile != nil {
+					entries.SetPath(apiFilePrefix+"API_FILE", ddoc.apiFile)
+				}
+				if ddoc.dexApiFile != nil {
+					entries.SetPath(apiFilePrefix+"DEX_API_FILE", ddoc.dexApiFile)
+				}
+				if ddoc.privateApiFile != nil {
+					entries.SetPath(apiFilePrefix+"PRIVATE_API_FILE", ddoc.privateApiFile)
+				}
+				if ddoc.privateDexApiFile != nil {
+					entries.SetPath(apiFilePrefix+"PRIVATE_DEX_API_FILE", ddoc.privateDexApiFile)
+				}
+				if ddoc.removedApiFile != nil {
+					entries.SetPath(apiFilePrefix+"REMOVED_API_FILE", ddoc.removedApiFile)
+				}
+				if ddoc.removedDexApiFile != nil {
+					entries.SetPath(apiFilePrefix+"REMOVED_DEX_API_FILE", ddoc.removedDexApiFile)
+				}
+				if ddoc.exactApiFile != nil {
+					entries.SetPath(apiFilePrefix+"EXACT_API_FILE", ddoc.exactApiFile)
+				}
+				if ddoc.proguardFile != nil {
+					entries.SetPath(apiFilePrefix+"PROGUARD_FILE", ddoc.proguardFile)
+				}
 			},
 		},
 		ExtraFooters: []android.AndroidMkExtraFootersFunc{
@@ -517,21 +540,9 @@ func (ddoc *Droiddoc) AndroidMkEntries() []android.AndroidMkEntries {
 }
 
 func (dstubs *Droidstubs) AndroidMkEntries() []android.AndroidMkEntries {
-	// If the stubsSrcJar is not generated (because generate_stubs is false) then
-	// use the api file as the output file to ensure the relevant phony targets
-	// are created in make if only the api txt file is being generated. This is
-	// needed because an invalid output file would prevent the make entries from
-	// being written.
-	// TODO(b/146727827): Revert when we do not need to generate stubs and API separately.
-	distFile := android.OptionalPathForPath(dstubs.apiFile)
-	outputFile := android.OptionalPathForPath(dstubs.stubsSrcJar)
-	if !outputFile.Valid() {
-		outputFile = distFile
-	}
 	return []android.AndroidMkEntries{android.AndroidMkEntries{
 		Class:      "JAVA_LIBRARIES",
-		DistFile:   distFile,
-		OutputFile: outputFile,
+		OutputFile: android.OptionalPathForPath(dstubs.stubsSrcJar),
 		Include:    "$(BUILD_SYSTEM)/soong_droiddoc_prebuilt.mk",
 		ExtraEntries: []android.AndroidMkExtraEntriesFunc{
 			func(entries *android.AndroidMkEntries) {
@@ -550,18 +561,35 @@ func (dstubs *Droidstubs) AndroidMkEntries() []android.AndroidMkEntries {
 				if dstubs.metadataZip != nil {
 					entries.SetPath("LOCAL_DROIDDOC_METADATA_ZIP", dstubs.metadataZip)
 				}
+				apiFilePrefix := "INTERNAL_PLATFORM_"
+				if String(dstubs.properties.Api_tag_name) != "" {
+					apiFilePrefix += String(dstubs.properties.Api_tag_name) + "_"
+				}
+				if dstubs.apiFile != nil {
+					entries.SetPath(apiFilePrefix+"API_FILE", dstubs.apiFile)
+				}
+				if dstubs.dexApiFile != nil {
+					entries.SetPath(apiFilePrefix+"DEX_API_FILE", dstubs.dexApiFile)
+				}
+				if dstubs.privateApiFile != nil {
+					entries.SetPath(apiFilePrefix+"PRIVATE_API_FILE", dstubs.privateApiFile)
+				}
+				if dstubs.privateDexApiFile != nil {
+					entries.SetPath(apiFilePrefix+"PRIVATE_DEX_API_FILE", dstubs.privateDexApiFile)
+				}
+				if dstubs.removedApiFile != nil {
+					entries.SetPath(apiFilePrefix+"REMOVED_API_FILE", dstubs.removedApiFile)
+				}
+				if dstubs.removedDexApiFile != nil {
+					entries.SetPath(apiFilePrefix+"REMOVED_DEX_API_FILE", dstubs.removedDexApiFile)
+				}
+				if dstubs.exactApiFile != nil {
+					entries.SetPath(apiFilePrefix+"EXACT_API_FILE", dstubs.exactApiFile)
+				}
 			},
 		},
 		ExtraFooters: []android.AndroidMkExtraFootersFunc{
 			func(w io.Writer, name, prefix, moduleDir string, entries *android.AndroidMkEntries) {
-				if dstubs.apiFile != nil {
-					fmt.Fprintf(w, ".PHONY: %s %s.txt\n", dstubs.Name(), dstubs.Name())
-					fmt.Fprintf(w, "%s %s.txt: %s\n", dstubs.Name(), dstubs.Name(), dstubs.apiFile)
-				}
-				if dstubs.removedApiFile != nil {
-					fmt.Fprintf(w, ".PHONY: %s %s.txt\n", dstubs.Name(), dstubs.Name())
-					fmt.Fprintf(w, "%s %s.txt: %s\n", dstubs.Name(), dstubs.Name(), dstubs.removedApiFile)
-				}
 				if dstubs.checkCurrentApiTimestamp != nil {
 					fmt.Fprintln(w, ".PHONY:", dstubs.Name()+"-check-current-api")
 					fmt.Fprintln(w, dstubs.Name()+"-check-current-api:",
@@ -588,12 +616,14 @@ func (dstubs *Droidstubs) AndroidMkEntries() []android.AndroidMkEntries {
 					fmt.Fprintln(w, dstubs.Name()+"-check-last-released-api:",
 						dstubs.checkLastReleasedApiTimestamp.String())
 
-					fmt.Fprintln(w, ".PHONY: checkapi")
-					fmt.Fprintln(w, "checkapi:",
-						dstubs.checkLastReleasedApiTimestamp.String())
+					if dstubs.Name() != "android.car-system-stubs-docs" {
+						fmt.Fprintln(w, ".PHONY: checkapi")
+						fmt.Fprintln(w, "checkapi:",
+							dstubs.checkLastReleasedApiTimestamp.String())
 
-					fmt.Fprintln(w, ".PHONY: droidcore")
-					fmt.Fprintln(w, "droidcore: checkapi")
+						fmt.Fprintln(w, ".PHONY: droidcore")
+						fmt.Fprintln(w, "droidcore: checkapi")
+					}
 				}
 				if dstubs.apiLintTimestamp != nil {
 					fmt.Fprintln(w, ".PHONY:", dstubs.Name()+"-api-lint")
@@ -626,11 +656,6 @@ func (dstubs *Droidstubs) AndroidMkEntries() []android.AndroidMkEntries {
 }
 
 func (a *AndroidAppImport) AndroidMkEntries() []android.AndroidMkEntries {
-	if !a.IsForPlatform() {
-		// The non-platform variant is placed inside APEX. No reason to
-		// make it available to Make.
-		return nil
-	}
 	return []android.AndroidMkEntries{android.AndroidMkEntries{
 		Class:      "APPS",
 		OutputFile: android.OptionalPathForPath(a.outputFile),
@@ -676,7 +701,6 @@ func (r *RuntimeResourceOverlay) AndroidMkEntries() []android.AndroidMkEntries {
 			func(entries *android.AndroidMkEntries) {
 				entries.SetString("LOCAL_CERTIFICATE", r.certificate.AndroidMkString())
 				entries.SetPath("LOCAL_MODULE_PATH", r.installDir.ToMakePath())
-				entries.AddStrings("LOCAL_OVERRIDES_PACKAGES", r.properties.Overrides...)
 			},
 		},
 	}}

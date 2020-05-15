@@ -133,7 +133,6 @@ bootstrap_go_package {
     pkgPath: "android/soong/cc/config",
     deps: [
         "soong-android",
-        "soong-remoteexec",
     ],
     srcs: [
         "cc/config/clang.go",
@@ -188,7 +187,6 @@ bootstrap_go_package {
         "cc/rs.go",
         "cc/sanitize.go",
         "cc/sabi.go",
-        "cc/sdk.go",
         "cc/snapshot_utils.go",
         "cc/stl.go",
         "cc/strip.go",
@@ -350,7 +348,6 @@ bootstrap_go_package {
     deps: [
         "blueprint-proptools",
         "soong-android",
-        "soong-remoteexec",
     ],
     srcs: [
         "java/config/config.go",
@@ -392,7 +389,6 @@ bootstrap_go_package {
     srcs: [
         "rust/androidmk.go",
         "rust/compiler.go",
-        "rust/coverage.go",
         "rust/binary.go",
         "rust/builder.go",
         "rust/library.go",
@@ -405,7 +401,6 @@ bootstrap_go_package {
     testSrcs: [
         "rust/binary_test.go",
         "rust/compiler_test.go",
-        "rust/coverage_test.go",
         "rust/library_test.go",
         "rust/rust_test.go",
         "rust/test_test.go",
@@ -552,22 +547,6 @@ bootstrap_go_package {
     pluginFor: ["soong_build"],
 }
 
-bootstrap_go_package {
-    name: "soong-remoteexec",
-    pkgPath: "android/soong/remoteexec",
-    deps: [
-        "blueprint",
-        "soong-android",
-    ],
-    srcs: [
-        "remoteexec/remoteexec.go",
-    ],
-    testSrcs: [
-        "remoteexec/remoteexec_test.go",
-    ],
-    pluginFor: ["soong_build"],
-}
-
 //
 // Defaults to enable various configurations of host bionic
 //
@@ -648,8 +627,7 @@ toolchain_library {
     arch: {
         arm: {
             src: "prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/lib/gcc/arm-linux-androideabi/4.9.x/libgcc.a",
-            repack_objects_to_keep: [],
-            enabled: false,
+            repack_objects_to_keep: ["unwind-arm.o", "libunwind.o", "pr-support.o"],
         },
         arm64: {
             src: "prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/lib/gcc/aarch64-linux-android/4.9.x/libgcc.a",

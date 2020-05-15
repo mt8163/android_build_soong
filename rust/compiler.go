@@ -110,7 +110,6 @@ type baseCompiler struct {
 	linkDirs      []string
 	edition       string
 	src           android.Path //rustc takes a single src file
-	coverageFile  android.Path //rustc generates a single gcno file
 
 	// Install related
 	dir      string
@@ -119,10 +118,6 @@ type baseCompiler struct {
 	relative string
 	path     android.InstallPath
 	location installLocation
-}
-
-func (compiler *baseCompiler) coverageOutputZipPath() android.OptionalPath {
-	panic("baseCompiler does not implement coverageOutputZipPath()")
 }
 
 var _ compiler = (*baseCompiler)(nil)
@@ -188,8 +183,8 @@ func (compiler *baseCompiler) compilerDeps(ctx DepsContext, deps Deps) Deps {
 
 	if !Bool(compiler.Properties.No_stdlibs) {
 		for _, stdlib := range config.Stdlibs {
-			// If we're building for the primary host target, use the compiler's stdlibs
-			if ctx.Host() && ctx.TargetPrimary() {
+			// If we're building for host, use the compiler's stdlibs
+			if ctx.Host() {
 				stdlib = stdlib + "_" + ctx.toolchain().RustTriple()
 			}
 
@@ -197,12 +192,9 @@ func (compiler *baseCompiler) compilerDeps(ctx DepsContext, deps Deps) Deps {
 			// static linking is the default, if one of our static
 			// dependencies uses a dynamic library, we need to dynamically
 			// link the stdlib as well.
-			if (len(deps.Dylibs) > 0) || ctx.Device() {
+			if (len(deps.Dylibs) > 0) || (!ctx.Host()) {
 				// Dynamically linked stdlib
 				deps.Dylibs = append(deps.Dylibs, stdlib)
-			} else if ctx.Host() && !ctx.TargetPrimary() {
-				// Otherwise use the static in-tree stdlib for host secondary arch
-				deps.Rlibs = append(deps.Rlibs, stdlib+".static")
 			}
 		}
 	}
@@ -230,18 +222,11 @@ func (compiler *baseCompiler) installDir(ctx ModuleContext) android.InstallPath 
 	if ctx.toolchain().Is64Bit() && compiler.dir64 != "" {
 		dir = compiler.dir64
 	}
-	if ctx.Target().NativeBridge == android.NativeBridgeEnabled {
-		dir = filepath.Join(dir, ctx.Target().NativeBridgeRelativePath)
-	}
-	if !ctx.Host() && ctx.Config().HasMultilibConflict(ctx.Arch().ArchType) {
+	if !ctx.Host() || ctx.Target().NativeBridge == android.NativeBridgeEnabled {
 		dir = filepath.Join(dir, ctx.Arch().ArchType.String())
 	}
 	return android.PathForModuleInstall(ctx, dir, compiler.subDir,
 		compiler.relativeInstallPath(), compiler.relative)
-}
-
-func (compiler *baseCompiler) nativeCoverage() bool {
-	return false
 }
 
 func (compiler *baseCompiler) install(ctx ModuleContext, file android.Path) {

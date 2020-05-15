@@ -17,7 +17,6 @@ package android
 import (
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -42,7 +41,7 @@ import (
 //     counts as a match
 // - it has none of the "Without" properties matched (same rules as above)
 
-func RegisterNeverallowMutator(ctx RegisterMutatorsContext) {
+func registerNeverallowMutator(ctx RegisterMutatorsContext) {
 	ctx.BottomUp("neverallow", neverallowMutator).Parallel()
 }
 
@@ -54,7 +53,6 @@ func init() {
 	AddNeverAllowRules(createLibcoreRules()...)
 	AddNeverAllowRules(createMediaRules()...)
 	AddNeverAllowRules(createJavaDeviceForHostRules()...)
-	AddNeverAllowRules(createCcSdkVariantRules()...)
 }
 
 // Add a NeverAllow rule to the set of rules to apply.
@@ -141,7 +139,6 @@ func createLibcoreRules() []Rule {
 		"external/icu",
 		"external/okhttp",
 		"external/wycheproof",
-		"prebuilts",
 	}
 
 	// Core library constraints. The sdk_version: "none" can only be used in core library projects.
@@ -149,8 +146,7 @@ func createLibcoreRules() []Rule {
 	rules := []Rule{
 		NeverAllow().
 			NotIn(coreLibraryProjects...).
-			With("sdk_version", "none").
-			WithoutMatcher("name", Regexp("^android_.*stubs_current$")),
+			With("sdk_version", "none"),
 	}
 
 	return rules
@@ -176,37 +172,6 @@ func createJavaDeviceForHostRules() []Rule {
 			NotIn(javaDeviceForHostProjectsWhitelist...).
 			ModuleType("java_device_for_host", "java_host_for_device").
 			Because("java_device_for_host can only be used in whitelisted projects"),
-	}
-}
-
-func createCcSdkVariantRules() []Rule {
-	sdkVersionOnlyWhitelist := []string{
-		// derive_sdk_prefer32 has stem: "derive_sdk" which conflicts with the derive_sdk.
-		// This sometimes works because the APEX modules that contain derive_sdk and
-		// derive_sdk_prefer32 suppress the platform installation rules, but fails when
-		// the APEX modules contain the SDK variant and the platform variant still exists.
-		"frameworks/base/apex/sdkextensions/derive_sdk",
-	}
-
-	platformVariantPropertiesWhitelist := []string{
-		// android_native_app_glue and libRSSupport use native_window.h but target old
-		// sdk versions (minimum and 9 respectively) where libnativewindow didn't exist,
-		// so they can't add libnativewindow to shared_libs to get the header directory
-		// for the platform variant.  Allow them to use the platform variant
-		// property to set shared_libs.
-		"prebuilts/ndk",
-		"frameworks/rs",
-	}
-
-	return []Rule{
-		NeverAllow().
-			NotIn(sdkVersionOnlyWhitelist...).
-			WithMatcher("sdk_variant_only", isSetMatcherInstance).
-			Because("sdk_variant_only can only be used in whitelisted projects"),
-		NeverAllow().
-			NotIn(platformVariantPropertiesWhitelist...).
-			WithMatcher("platform.shared_libs", isSetMatcherInstance).
-			Because("platform variant properties can only be used in whitelisted projects"),
 	}
 }
 
@@ -248,7 +213,7 @@ func neverallowMutator(ctx BottomUpMutatorContext) {
 }
 
 type ValueMatcher interface {
-	Test(string) bool
+	test(string) bool
 	String() string
 }
 
@@ -256,7 +221,7 @@ type equalMatcher struct {
 	expected string
 }
 
-func (m *equalMatcher) Test(value string) bool {
+func (m *equalMatcher) test(value string) bool {
 	return m.expected == value
 }
 
@@ -267,7 +232,7 @@ func (m *equalMatcher) String() string {
 type anyMatcher struct {
 }
 
-func (m *anyMatcher) Test(value string) bool {
+func (m *anyMatcher) test(value string) bool {
 	return true
 }
 
@@ -281,37 +246,13 @@ type startsWithMatcher struct {
 	prefix string
 }
 
-func (m *startsWithMatcher) Test(value string) bool {
+func (m *startsWithMatcher) test(value string) bool {
 	return strings.HasPrefix(value, m.prefix)
 }
 
 func (m *startsWithMatcher) String() string {
 	return ".starts-with(" + m.prefix + ")"
 }
-
-type regexMatcher struct {
-	re *regexp.Regexp
-}
-
-func (m *regexMatcher) Test(value string) bool {
-	return m.re.MatchString(value)
-}
-
-func (m *regexMatcher) String() string {
-	return ".regexp(" + m.re.String() + ")"
-}
-
-type isSetMatcher struct{}
-
-func (m *isSetMatcher) Test(value string) bool {
-	return value != ""
-}
-
-func (m *isSetMatcher) String() string {
-	return ".is-set"
-}
-
-var isSetMatcherInstance = &isSetMatcher{}
 
 type ruleProperty struct {
 	fields  []string // e.x.: Vndk.Enabled
@@ -516,14 +457,6 @@ func StartsWith(prefix string) ValueMatcher {
 	return &startsWithMatcher{prefix}
 }
 
-func Regexp(re string) ValueMatcher {
-	r, err := regexp.Compile(re)
-	if err != nil {
-		panic(err)
-	}
-	return &regexMatcher{r}
-}
-
 // assorted utils
 
 func cleanPaths(paths []string) []string {
@@ -574,7 +507,7 @@ func hasProperty(properties []interface{}, prop ruleProperty) bool {
 		}
 
 		check := func(value string) bool {
-			return prop.matcher.Test(value)
+			return prop.matcher.test(value)
 		}
 
 		if matchValue(propertiesValue, check) {
@@ -631,6 +564,6 @@ func neverallowRules(config Config) []Rule {
 // Overrides the default neverallow rules for the supplied config.
 //
 // For testing only.
-func SetTestNeverallowRules(config Config, testRules []Rule) {
+func setTestNeverallowRules(config Config, testRules []Rule) {
 	config.Once(neverallowRulesKey, func() interface{} { return testRules })
 }

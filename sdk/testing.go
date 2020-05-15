@@ -90,7 +90,6 @@ func testSdkContext(bp string, fs map[string][]byte) (*android.TestContext, andr
 	// from java package
 	java.RegisterJavaBuildComponents(ctx)
 	java.RegisterAppBuildComponents(ctx)
-	java.RegisterSdkLibraryBuildComponents(ctx)
 	java.RegisterStubsBuildComponents(ctx)
 	java.RegisterSystemModulesBuildComponents(ctx)
 
@@ -173,15 +172,6 @@ func (h *TestHelper) AssertStringEquals(message string, expected string, actual 
 	}
 }
 
-func (h *TestHelper) AssertErrorMessageEquals(message string, expected string, actual error) {
-	h.t.Helper()
-	if actual == nil {
-		h.t.Errorf("Expected error but was nil")
-	} else if actual.Error() != expected {
-		h.t.Errorf("%s: expected %s, actual %s", message, expected, actual.Error())
-	}
-}
-
 func (h *TestHelper) AssertTrimmedStringEquals(message string, expected string, actual string) {
 	h.t.Helper()
 	h.AssertStringEquals(message, strings.TrimSpace(expected), strings.TrimSpace(actual))
@@ -207,7 +197,7 @@ type testSdkResult struct {
 // e.g. find the src/dest pairs from each cp command, the various zip files
 // generated, etc.
 func (r *testSdkResult) getSdkSnapshotBuildInfo(sdk *sdk) *snapshotBuildInfo {
-	androidBpContents := sdk.GetAndroidBpContentsForTests()
+	androidBpContents := strings.NewReplacer("\\n", "\n").Replace(sdk.GetAndroidBpContentsForTests())
 
 	info := &snapshotBuildInfo{
 		r:                 r,
@@ -348,15 +338,14 @@ func checkAllOtherCopyRules(expected string) snapshotBuildInfoChecker {
 	}
 }
 
-// Check that the specified paths match the list of zips to merge with the intermediate zip.
-func checkMergeZips(expected ...string) snapshotBuildInfoChecker {
+// Check that the specified path is in the list of zips to merge with the intermediate zip.
+func checkMergeZip(expected string) snapshotBuildInfoChecker {
 	return func(info *snapshotBuildInfo) {
 		info.r.t.Helper()
 		if info.intermediateZip == "" {
 			info.r.t.Errorf("No intermediate zip file was created")
 		}
-
-		info.r.AssertDeepEquals("mismatching merge zip files", expected, info.mergeZips)
+		ensureListContains(info.r.t, info.mergeZips, expected)
 	}
 }
 

@@ -109,13 +109,6 @@ type ModuleTypeProperties struct {
 	// the list of SOONG_CONFIG variables that this module type will read
 	Variables []string
 
-	// the list of boolean SOONG_CONFIG variables that this module type will read
-	Bool_variables []string
-
-	// the list of SOONG_CONFIG variables that this module type will read. The value will be
-	// inserted into the properties with %s substitution.
-	Value_variables []string
-
 	// the list of properties that this module type will extend.
 	Properties []string
 }
@@ -152,30 +145,6 @@ func processModuleTypeDef(v *SoongConfigDefinition, def *parser.Module) (errs []
 		variableNames:        props.Variables,
 	}
 	v.ModuleTypes[props.Name] = mt
-
-	for _, name := range props.Bool_variables {
-		if name == "" {
-			return []error{fmt.Errorf("bool_variable name must not be blank")}
-		}
-
-		mt.Variables = append(mt.Variables, &boolVariable{
-			baseVariable: baseVariable{
-				variable: name,
-			},
-		})
-	}
-
-	for _, name := range props.Value_variables {
-		if name == "" {
-			return []error{fmt.Errorf("value_variables entry must not be blank")}
-		}
-
-		mt.Variables = append(mt.Variables, &valueVariable{
-			baseVariable: baseVariable{
-				variable: name,
-			},
-		})
-	}
 
 	return nil
 }
@@ -420,17 +389,15 @@ func typeForPropertyFromPropertyStruct(ps interface{}, property string) reflect.
 
 // PropertiesToApply returns the applicable properties from a ModuleType that should be applied
 // based on SoongConfig values.
-func PropertiesToApply(moduleType *ModuleType, props reflect.Value, config SoongConfig) ([]interface{}, error) {
+func PropertiesToApply(moduleType *ModuleType, props reflect.Value, config SoongConfig) []interface{} {
 	var ret []interface{}
 	props = props.Elem().FieldByName(soongConfigProperty)
 	for i, c := range moduleType.Variables {
-		if ps, err := c.PropertiesToApply(config, props.Field(i)); err != nil {
-			return nil, err
-		} else if ps != nil {
+		if ps := c.PropertiesToApply(config, props.Field(i)); ps != nil {
 			ret = append(ret, ps)
 		}
 	}
-	return ret, nil
+	return ret
 }
 
 type ModuleType struct {
@@ -456,7 +423,7 @@ type soongConfigVariable interface {
 
 	// PropertiesToApply should return one of the interface{} values set by initializeProperties to be applied
 	// to the module.
-	PropertiesToApply(config SoongConfig, values reflect.Value) (interface{}, error)
+	PropertiesToApply(config SoongConfig, values reflect.Value) interface{}
 }
 
 type baseVariable struct {
@@ -491,14 +458,14 @@ func (s *stringVariable) initializeProperties(v reflect.Value, typ reflect.Type)
 	}
 }
 
-func (s *stringVariable) PropertiesToApply(config SoongConfig, values reflect.Value) (interface{}, error) {
+func (s *stringVariable) PropertiesToApply(config SoongConfig, values reflect.Value) interface{} {
 	for j, v := range s.values {
 		if config.String(s.variable) == v {
-			return values.Field(j).Interface(), nil
+			return values.Field(j).Interface()
 		}
 	}
 
-	return nil, nil
+	return nil
 }
 
 type boolVariable struct {
@@ -513,82 +480,10 @@ func (b boolVariable) initializeProperties(v reflect.Value, typ reflect.Type) {
 	v.Set(reflect.Zero(typ))
 }
 
-func (b boolVariable) PropertiesToApply(config SoongConfig, values reflect.Value) (interface{}, error) {
+func (b boolVariable) PropertiesToApply(config SoongConfig, values reflect.Value) interface{} {
 	if config.Bool(b.variable) {
-		return values.Interface(), nil
+		return values.Interface()
 	}
-
-	return nil, nil
-}
-
-type valueVariable struct {
-	baseVariable
-}
-
-func (s *valueVariable) variableValuesType() reflect.Type {
-	return emptyInterfaceType
-}
-
-func (s *valueVariable) initializeProperties(v reflect.Value, typ reflect.Type) {
-	v.Set(reflect.Zero(typ))
-}
-
-func (s *valueVariable) PropertiesToApply(config SoongConfig, values reflect.Value) (interface{}, error) {
-	if !config.IsSet(s.variable) {
-		return nil, nil
-	}
-	configValue := config.String(s.variable)
-
-	propStruct := values.Elem().Elem()
-	for i := 0; i < propStruct.NumField(); i++ {
-		field := propStruct.Field(i)
-		kind := field.Kind()
-		if kind == reflect.Ptr {
-			if field.IsNil() {
-				continue
-			}
-			field = field.Elem()
-		}
-		switch kind {
-		case reflect.String:
-			err := printfIntoProperty(field, configValue)
-			if err != nil {
-				return nil, fmt.Errorf("soong_config_variables.%s.%s: %s", s.variable, propStruct.Type().Field(i).Name, err)
-			}
-		case reflect.Slice:
-			for j := 0; j < field.Len(); j++ {
-				err := printfIntoProperty(field.Index(j), configValue)
-				if err != nil {
-					return nil, fmt.Errorf("soong_config_variables.%s.%s: %s", s.variable, propStruct.Type().Field(i).Name, err)
-				}
-			}
-		case reflect.Bool:
-			// Nothing to do
-		default:
-			return nil, fmt.Errorf("soong_config_variables.%s.%s: unsupported property type %q", s.variable, propStruct.Type().Field(i).Name, kind)
-		}
-	}
-
-	return values.Interface(), nil
-}
-
-func printfIntoProperty(propertyValue reflect.Value, configValue string) error {
-	s := propertyValue.String()
-
-	count := strings.Count(s, "%")
-	if count == 0 {
-		return nil
-	}
-
-	if count > 1 {
-		return fmt.Errorf("value variable properties only support a single '%%'")
-	}
-
-	if !strings.Contains(s, "%s") {
-		return fmt.Errorf("unsupported %% in value variable property")
-	}
-
-	propertyValue.Set(reflect.ValueOf(fmt.Sprintf(s, configValue)))
 
 	return nil
 }

@@ -75,12 +75,11 @@ type LibraryMutatedProperties struct {
 type libraryDecorator struct {
 	*baseCompiler
 
-	Properties            LibraryCompilerProperties
-	MutatedProperties     LibraryMutatedProperties
-	distFile              android.OptionalPath
-	coverageOutputZipFile android.OptionalPath
-	unstrippedOutputFile  android.Path
-	includeDirs           android.Paths
+	Properties           LibraryCompilerProperties
+	MutatedProperties    LibraryMutatedProperties
+	distFile             android.OptionalPath
+	unstrippedOutputFile android.Path
+	includeDirs          android.Paths
 }
 
 type libraryInterface interface {
@@ -106,10 +105,6 @@ type libraryInterface interface {
 	BuildOnlyDylib()
 	BuildOnlyStatic()
 	BuildOnlyShared()
-}
-
-func (library *libraryDecorator) nativeCoverage() bool {
-	return true
 }
 
 func (library *libraryDecorator) exportedDirs() []string {
@@ -286,7 +281,7 @@ func (library *libraryDecorator) BuildOnlyShared() {
 }
 
 func NewRustLibrary(hod android.HostOrDeviceSupported) (*Module, *libraryDecorator) {
-	module := newModule(hod, android.MultilibBoth)
+	module := newModule(hod, android.MultilibFirst)
 
 	library := &libraryDecorator{
 		MutatedProperties: LibraryMutatedProperties{
@@ -323,8 +318,6 @@ func (library *libraryDecorator) compilerDeps(ctx DepsContext, deps Deps) Deps {
 
 	if ctx.toolchain().Bionic() && (library.dylib() || library.shared()) {
 		deps = library.baseCompiler.bionicDeps(ctx, deps)
-		deps.CrtBegin = "crtbegin_so"
-		deps.CrtEnd = "crtend_so"
 	}
 
 	return deps
@@ -356,36 +349,23 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 		fileName := library.getStem(ctx) + ctx.toolchain().RlibSuffix()
 		outputFile = android.PathForModuleOut(ctx, fileName)
 
-		outputs := TransformSrctoRlib(ctx, srcPath, deps, flags, outputFile, deps.linkDirs)
-		library.coverageFile = outputs.coverageFile
+		TransformSrctoRlib(ctx, srcPath, deps, flags, outputFile, deps.linkDirs)
 	} else if library.dylib() {
 		fileName := library.getStem(ctx) + ctx.toolchain().DylibSuffix()
 		outputFile = android.PathForModuleOut(ctx, fileName)
 
-		outputs := TransformSrctoDylib(ctx, srcPath, deps, flags, outputFile, deps.linkDirs)
-		library.coverageFile = outputs.coverageFile
+		TransformSrctoDylib(ctx, srcPath, deps, flags, outputFile, deps.linkDirs)
 	} else if library.static() {
 		fileName := library.getStem(ctx) + ctx.toolchain().StaticLibSuffix()
 		outputFile = android.PathForModuleOut(ctx, fileName)
 
-		outputs := TransformSrctoStatic(ctx, srcPath, deps, flags, outputFile, deps.linkDirs)
-		library.coverageFile = outputs.coverageFile
+		TransformSrctoStatic(ctx, srcPath, deps, flags, outputFile, deps.linkDirs)
 	} else if library.shared() {
 		fileName := library.getStem(ctx) + ctx.toolchain().SharedLibSuffix()
 		outputFile = android.PathForModuleOut(ctx, fileName)
 
-		outputs := TransformSrctoShared(ctx, srcPath, deps, flags, outputFile, deps.linkDirs)
-		library.coverageFile = outputs.coverageFile
+		TransformSrctoShared(ctx, srcPath, deps, flags, outputFile, deps.linkDirs)
 	}
-
-	var coverageFiles android.Paths
-	if library.coverageFile != nil {
-		coverageFiles = append(coverageFiles, library.coverageFile)
-	}
-	if len(deps.coverageFiles) > 0 {
-		coverageFiles = append(coverageFiles, deps.coverageFiles...)
-	}
-	library.coverageOutputZipFile = TransformCoverageFilesToZip(ctx, coverageFiles, library.getStem(ctx))
 
 	if library.rlib() || library.dylib() {
 		library.reexportDirs(deps.linkDirs...)

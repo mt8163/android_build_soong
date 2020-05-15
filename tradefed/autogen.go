@@ -64,16 +64,12 @@ type Config interface {
 
 type Option struct {
 	Name  string
-	Key   string
 	Value string
 }
 
 var _ Config = Option{}
 
 func (o Option) Config() string {
-	if o.Key != "" {
-		return fmt.Sprintf(`<option name="%s" key="%s" value="%s" />`, o.Name, o.Key, o.Value)
-	}
 	return fmt.Sprintf(`<option name="%s" value="%s" />`, o.Name, o.Value)
 }
 

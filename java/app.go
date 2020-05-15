@@ -45,7 +45,6 @@ func RegisterAppBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("android_app_certificate", AndroidAppCertificateFactory)
 	ctx.RegisterModuleType("override_android_app", OverrideAndroidAppModuleFactory)
 	ctx.RegisterModuleType("override_android_test", OverrideAndroidTestModuleFactory)
-	ctx.RegisterModuleType("override_runtime_resource_overlay", OverrideRuntimeResourceOverlayModuleFactory)
 	ctx.RegisterModuleType("android_app_import", AndroidAppImportFactory)
 	ctx.RegisterModuleType("android_test_import", AndroidTestImportFactory)
 	ctx.RegisterModuleType("runtime_resource_overlay", RuntimeResourceOverlayFactory)
@@ -80,13 +79,9 @@ type appProperties struct {
 	// list of native libraries that will be provided in or alongside the resulting jar
 	Jni_libs []string `android:"arch_variant"`
 
-	// if true, use JNI libraries that link against platform APIs even if this module sets
+	// if true, allow JNI libraries that link against platform APIs even if this module sets
 	// sdk_version.
 	Jni_uses_platform_apis *bool
-
-	// if true, use JNI libraries that link against SDK APIs even if this module does not set
-	// sdk_version.
-	Jni_uses_sdk_apis *bool
 
 	// STL library to use for JNI libraries.
 	Stl *string `android:"arch_variant"`
@@ -110,17 +105,6 @@ type appProperties struct {
 	// If set, find and merge all NOTICE files that this module and its dependencies have and store
 	// it in the APK as an asset.
 	Embed_notices *bool
-
-	// cc.Coverage related properties
-	PreventInstall    bool `blueprint:"mutated"`
-	HideFromMake      bool `blueprint:"mutated"`
-	IsCoverageVariant bool `blueprint:"mutated"`
-
-	// Whether this app is considered mainline updatable or not. When set to true, this will enforce
-	// additional rules to make sure an app can safely be updated. Default is false.
-	// Prefer using other specific properties if build behaviour must be changed; avoid using this
-	// flag for anything but neverallow rules (unless the behaviour change is invisible to owners).
-	Updatable *bool
 }
 
 // android_app properties that can be overridden by override_android_app
@@ -129,23 +113,11 @@ type overridableAppProperties struct {
 	// or an android_app_certificate module name in the form ":module".
 	Certificate *string
 
-	// Name of the signing certificate lineage file.
-	Lineage *string
-
 	// the package name of this app. The package name in the manifest file is used if one was not given.
 	Package_name *string
 
 	// the logging parent of this app.
 	Logging_parent *string
-}
-
-// runtime_resource_overlay properties that can be overridden by override_runtime_resource_overlay
-type OverridableRuntimeResourceOverlayProperties struct {
-	// the package name of this app. The package name in the manifest file is used if one was not given.
-	Package_name *string
-
-	// the target package name of this overlay app. The target package name in the manifest file is used if one was not given.
-	Target_package_name *string
 }
 
 type AndroidApp struct {
@@ -161,8 +133,7 @@ type AndroidApp struct {
 
 	overridableAppProperties overridableAppProperties
 
-	installJniLibs     []jniLib
-	jniCoverageOutputs android.Paths
+	installJniLibs []jniLib
 
 	bundleFile android.Path
 
@@ -178,8 +149,6 @@ type AndroidApp struct {
 	noticeOutputs android.NoticeOutputs
 
 	overriddenManifestPackageName string
-
-	android.ApexBundleDepsInfo
 }
 
 func (a *AndroidApp) IsInstallable() bool {
@@ -200,10 +169,6 @@ func (a *AndroidApp) OutputFile() android.Path {
 
 func (a *AndroidApp) Certificate() Certificate {
 	return a.certificate
-}
-
-func (a *AndroidApp) JniCoverageOutputs() android.Paths {
-	return a.jniCoverageOutputs
 }
 
 var _ AndroidLibraryDependency = (*AndroidApp)(nil)
@@ -235,30 +200,10 @@ func (a *AndroidApp) DepsMutator(ctx android.BottomUpMutatorContext) {
 		a.aapt.deps(ctx, sdkDep)
 	}
 
-	usesSDK := a.sdkVersion().specified() && a.sdkVersion().kind != sdkCorePlatform
-
-	if usesSDK && Bool(a.appProperties.Jni_uses_sdk_apis) {
-		ctx.PropertyErrorf("jni_uses_sdk_apis",
-			"can only be set for modules that do not set sdk_version")
-	} else if !usesSDK && Bool(a.appProperties.Jni_uses_platform_apis) {
-		ctx.PropertyErrorf("jni_uses_platform_apis",
-			"can only be set for modules that set sdk_version")
-	}
-
 	tag := &jniDependencyTag{}
 	for _, jniTarget := range ctx.MultiTargets() {
 		variation := append(jniTarget.Variations(),
 			blueprint.Variation{Mutator: "link", Variation: "shared"})
-
-		// If the app builds against an Android SDK use the SDK variant of JNI dependencies
-		// unless jni_uses_platform_apis is set.
-		// Don't require the SDK variant for apps that are shipped on vendor, etc., as they already
-		// have stable APIs through the VNDK.
-		if (usesSDK && !a.RequiresStableAPIs(ctx) &&
-			!Bool(a.appProperties.Jni_uses_platform_apis)) ||
-			Bool(a.appProperties.Jni_uses_sdk_apis) {
-			variation = append(variation, blueprint.Variation{Mutator: "sdk", Variation: "sdk"})
-		}
 		ctx.AddFarVariationDependencies(variation, tag, a.appProperties.Jni_libs...)
 	}
 
@@ -287,50 +232,9 @@ func (a *AndroidTestHelperApp) GenerateAndroidBuildActions(ctx android.ModuleCon
 }
 
 func (a *AndroidApp) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	a.checkAppSdkVersions(ctx)
-	a.generateAndroidBuildActions(ctx)
-}
-
-func (a *AndroidApp) checkAppSdkVersions(ctx android.ModuleContext) {
-	if Bool(a.appProperties.Updatable) || a.ApexModuleBase.Updatable() {
-		if !a.sdkVersion().stable() {
-			ctx.PropertyErrorf("sdk_version", "Updatable apps must use stable SDKs, found %v", a.sdkVersion())
-		}
-		if String(a.deviceProperties.Min_sdk_version) == "" {
-			ctx.PropertyErrorf("updatable", "updatable apps must set min_sdk_version.")
-		}
-		if minSdkVersion, err := a.minSdkVersion().effectiveVersion(ctx); err == nil {
-			a.checkJniLibsSdkVersion(ctx, minSdkVersion)
-		} else {
-			ctx.PropertyErrorf("min_sdk_version", "%s", err.Error())
-		}
-	}
-
 	a.checkPlatformAPI(ctx)
-	a.checkSdkVersions(ctx)
-}
-
-// If an updatable APK sets min_sdk_version, min_sdk_vesion of JNI libs should match with it.
-// This check is enforced for "updatable" APKs (including APK-in-APEX).
-// b/155209650: until min_sdk_version is properly supported, use sdk_version instead.
-// because, sdk_version is overridden by min_sdk_version (if set as smaller)
-// and linkType is checked with dependencies so we can be sure that the whole dependency tree
-// will meet the requirements.
-func (a *AndroidApp) checkJniLibsSdkVersion(ctx android.ModuleContext, minSdkVersion sdkVersion) {
-	// It's enough to check direct JNI deps' sdk_version because all transitive deps from JNI deps are checked in cc.checkLinkType()
-	ctx.VisitDirectDeps(func(m android.Module) {
-		if !IsJniDepTag(ctx.OtherModuleDependencyTag(m)) {
-			return
-		}
-		dep, _ := m.(*cc.Module)
-		jniSdkVersion, err := android.ApiStrToNum(ctx, dep.SdkVersion())
-		if err != nil || int(minSdkVersion) < jniSdkVersion {
-			ctx.OtherModuleErrorf(dep, "sdk_version(%v) is higher than min_sdk_version(%v) of the containing android_app(%v)",
-				dep.SdkVersion(), minSdkVersion, ctx.ModuleName())
-			return
-		}
-
-	})
+	a.checkSdkVersion(ctx)
+	a.generateAndroidBuildActions(ctx)
 }
 
 // Returns true if the native libraries should be stored in the APK uncompressed and the
@@ -469,22 +373,6 @@ func (a *AndroidApp) jniBuildActions(jniLibs []jniLib, ctx android.ModuleContext
 		if a.shouldEmbedJnis(ctx) {
 			jniJarFile = android.PathForModuleOut(ctx, "jnilibs.zip")
 			TransformJniLibsToJar(ctx, jniJarFile, jniLibs, a.useEmbeddedNativeLibs(ctx))
-			for _, jni := range jniLibs {
-				if jni.coverageFile.Valid() {
-					// Only collect coverage for the first target arch if this is a multilib target.
-					// TODO(jungjw): Ideally, we want to collect both reports, but that would cause coverage
-					// data file path collisions since the current coverage file path format doesn't contain
-					// arch-related strings. This is fine for now though; the code coverage team doesn't use
-					// multi-arch targets such as test_suite_* for coverage collections yet.
-					//
-					// Work with the team to come up with a new format that handles multilib modules properly
-					// and change this.
-					if len(ctx.Config().Targets[android.Android]) == 1 ||
-						ctx.Config().Targets[android.Android][0].Arch.ArchType == jni.target.Arch.ArchType {
-						a.jniCoverageOutputs = append(a.jniCoverageOutputs, jni.coverageFile.Path())
-					}
-				}
-			}
 		} else {
 			a.installJniLibs = jniLibs
 		}
@@ -576,10 +464,6 @@ func processMainCert(m android.ModuleBase, certPropValue string, certificates []
 	return certificates
 }
 
-func (a *AndroidApp) InstallApkName() string {
-	return a.installApkName
-}
-
 func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	var apkDeps android.Paths
 
@@ -618,7 +502,7 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 
 	dexJarFile := a.dexBuildActions(ctx)
 
-	jniLibs, certificateDeps := collectAppDeps(ctx, a, a.shouldEmbedJnis(ctx), !Bool(a.appProperties.Jni_uses_platform_apis))
+	jniLibs, certificateDeps := collectAppDeps(ctx, a.shouldEmbedJnis(ctx), !Bool(a.appProperties.Jni_uses_platform_apis))
 	jniJarFile := a.jniBuildActions(jniLibs, ctx)
 
 	if ctx.Failed() {
@@ -630,17 +514,13 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 
 	// Build a final signed app package.
 	packageFile := android.PathForModuleOut(ctx, a.installApkName+".apk")
-	var lineageFile android.Path
-	if lineage := String(a.overridableAppProperties.Lineage); lineage != "" {
-		lineageFile = android.PathForModuleSrc(ctx, lineage)
-	}
-	CreateAndSignAppPackage(ctx, packageFile, a.exportPackage, jniJarFile, dexJarFile, certificates, apkDeps, lineageFile)
+	CreateAndSignAppPackage(ctx, packageFile, a.exportPackage, jniJarFile, dexJarFile, certificates, apkDeps)
 	a.outputFile = packageFile
 
 	for _, split := range a.aapt.splits {
 		// Sign the split APKs
 		packageFile := android.PathForModuleOut(ctx, a.installApkName+"_"+split.suffix+".apk")
-		CreateAndSignAppPackage(ctx, packageFile, split.path, nil, nil, certificates, apkDeps, lineageFile)
+		CreateAndSignAppPackage(ctx, packageFile, split.path, nil, nil, certificates, apkDeps)
 		a.extraOutputFiles = append(a.extraOutputFiles, packageFile)
 	}
 
@@ -656,28 +536,13 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 			ctx.InstallFile(a.installDir, extra.Base(), extra)
 		}
 	}
-
-	a.buildAppDependencyInfo(ctx)
 }
 
-type appDepsInterface interface {
-	sdkVersion() sdkSpec
-	minSdkVersion() sdkSpec
-	RequiresStableAPIs(ctx android.BaseModuleContext) bool
-}
-
-func collectAppDeps(ctx android.ModuleContext, app appDepsInterface,
-	shouldCollectRecursiveNativeDeps bool,
+func collectAppDeps(ctx android.ModuleContext, shouldCollectRecursiveNativeDeps bool,
 	checkNativeSdkVersion bool) ([]jniLib, []Certificate) {
-
 	var jniLibs []jniLib
 	var certificates []Certificate
 	seenModulePaths := make(map[string]bool)
-
-	if checkNativeSdkVersion {
-		checkNativeSdkVersion = app.sdkVersion().specified() &&
-			app.sdkVersion().kind != sdkCorePlatform && !app.RequiresStableAPIs(ctx)
-	}
 
 	ctx.WalkDeps(func(module android.Module, parent android.Module) bool {
 		otherName := ctx.OtherModuleName(module)
@@ -696,17 +561,23 @@ func collectAppDeps(ctx android.ModuleContext, app appDepsInterface,
 				}
 				seenModulePaths[path.String()] = true
 
-				if checkNativeSdkVersion && dep.SdkVersion() == "" {
-					ctx.PropertyErrorf("jni_libs", "JNI dependency %q uses platform APIs, but this module does not",
-						otherName)
+				if checkNativeSdkVersion {
+					if app, ok := ctx.Module().(interface{ sdkVersion() sdkSpec }); ok {
+						if app.sdkVersion().specified() &&
+							app.sdkVersion().kind != sdkCorePlatform &&
+							dep.SdkVersion() == "" {
+							ctx.PropertyErrorf("jni_libs",
+								"JNI dependency %q uses platform APIs, but this module does not",
+								otherName)
+						}
+					}
 				}
 
 				if lib.Valid() {
 					jniLibs = append(jniLibs, jniLib{
-						name:         ctx.OtherModuleName(module),
-						path:         path,
-						target:       module.Target(),
-						coverageFile: dep.CoverageOutputFile(),
+						name:   ctx.OtherModuleName(module),
+						path:   path,
+						target: module.Target(),
 					})
 				} else {
 					ctx.ModuleErrorf("dependency %q missing output file", otherName)
@@ -730,49 +601,6 @@ func collectAppDeps(ctx android.ModuleContext, app appDepsInterface,
 	})
 
 	return jniLibs, certificates
-}
-
-func (a *AndroidApp) walkPayloadDeps(ctx android.ModuleContext,
-	do func(ctx android.ModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool)) {
-
-	ctx.WalkDeps(func(child, parent android.Module) bool {
-		isExternal := !a.DepIsInSameApex(ctx, child)
-		if am, ok := child.(android.ApexModule); ok {
-			do(ctx, parent, am, isExternal)
-		}
-		return !isExternal
-	})
-}
-
-func (a *AndroidApp) buildAppDependencyInfo(ctx android.ModuleContext) {
-	if ctx.Host() {
-		return
-	}
-
-	depsInfo := android.DepNameToDepInfoMap{}
-	a.walkPayloadDeps(ctx, func(ctx android.ModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) {
-		depName := to.Name()
-		if info, exist := depsInfo[depName]; exist {
-			info.From = append(info.From, from.Name())
-			info.IsExternal = info.IsExternal && externalDep
-			depsInfo[depName] = info
-		} else {
-			toMinSdkVersion := "(no version)"
-			if m, ok := to.(interface{ MinSdkVersion() string }); ok {
-				if v := m.MinSdkVersion(); v != "" {
-					toMinSdkVersion = v
-				}
-			}
-			depsInfo[depName] = android.ApexModuleDepInfo{
-				To:            depName,
-				From:          []string{from.Name()},
-				IsExternal:    externalDep,
-				MinSdkVersion: toMinSdkVersion,
-			}
-		}
-	})
-
-	a.ApexBundleDepsInfo.BuildDepsInfoLists(ctx, a.MinSdkVersion(), depsInfo)
 }
 
 func (a *AndroidApp) getCertString(ctx android.BaseModuleContext) string {
@@ -802,26 +630,6 @@ func (a *AndroidApp) OutputFiles(tag string) (android.Paths, error) {
 func (a *AndroidApp) Privileged() bool {
 	return Bool(a.appProperties.Privileged)
 }
-
-func (a *AndroidApp) IsNativeCoverageNeeded(ctx android.BaseModuleContext) bool {
-	return ctx.Device() && (ctx.DeviceConfig().NativeCoverageEnabled() || ctx.DeviceConfig().ClangCoverageEnabled())
-}
-
-func (a *AndroidApp) PreventInstall() {
-	a.appProperties.PreventInstall = true
-}
-
-func (a *AndroidApp) HideFromMake() {
-	a.appProperties.HideFromMake = true
-}
-
-func (a *AndroidApp) MarkAsCoverageVariant(coverage bool) {
-	a.appProperties.IsCoverageVariant = coverage
-}
-
-func (a *AndroidApp) EnableCoverageIfNeeded() {}
-
-var _ cc.Coverage = (*AndroidApp)(nil)
 
 // android_app compiles sources and Android resources into an Android application package `.apk` file.
 func AndroidAppFactory() android.Module {
@@ -856,7 +664,6 @@ func AndroidAppFactory() android.Module {
 }
 
 type appTestProperties struct {
-	// The name of the android_app module that the tests will run against.
 	Instrumentation_for *string
 
 	// if specified, the instrumentation target package name in the manifest is overwritten by it.
@@ -1092,31 +899,9 @@ func OverrideAndroidTestModuleFactory() android.Module {
 	return m
 }
 
-type OverrideRuntimeResourceOverlay struct {
-	android.ModuleBase
-	android.OverrideModuleBase
-}
-
-func (i *OverrideRuntimeResourceOverlay) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	// All the overrides happen in the base module.
-	// TODO(jungjw): Check the base module type.
-}
-
-// override_runtime_resource_overlay is used to create a module based on another
-// runtime_resource_overlay module by overriding some of its properties.
-func OverrideRuntimeResourceOverlayModuleFactory() android.Module {
-	m := &OverrideRuntimeResourceOverlay{}
-	m.AddProperties(&OverridableRuntimeResourceOverlayProperties{})
-
-	android.InitAndroidMultiTargetsArchModule(m, android.DeviceSupported, android.MultilibCommon)
-	android.InitOverrideModule(m)
-	return m
-}
-
 type AndroidAppImport struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
-	android.ApexModuleBase
 	prebuilt android.Prebuilt
 
 	properties   AndroidAppImportProperties
@@ -1269,10 +1054,6 @@ func (a *AndroidAppImport) GenerateAndroidBuildActions(ctx android.ModuleContext
 	a.generateAndroidBuildActions(ctx)
 }
 
-func (a *AndroidAppImport) InstallApkName() string {
-	return a.BaseModuleName()
-}
-
 func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext) {
 	numCertPropsSet := 0
 	if String(a.properties.Certificate) != "" {
@@ -1288,7 +1069,7 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 		ctx.ModuleErrorf("One and only one of certficate, presigned, and default_dev_cert properties must be set")
 	}
 
-	_, certificates := collectAppDeps(ctx, a, false, false)
+	_, certificates := collectAppDeps(ctx, false, false)
 
 	// TODO: LOCAL_EXTRACT_APK/LOCAL_EXTRACT_DPI_APK
 	// TODO: LOCAL_PACKAGE_SPLITS
@@ -1330,8 +1111,6 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 		dexOutput = dexUncompressed
 	}
 
-	apkFilename := proptools.StringDefault(a.properties.Filename, a.BaseModuleName()+".apk")
-
 	// Sign or align the package
 	// TODO: Handle EXTERNAL
 	if !Bool(a.properties.Presigned) {
@@ -1342,11 +1121,11 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 			ctx.ModuleErrorf("Unexpected number of certificates were extracted: %q", certificates)
 		}
 		a.certificate = certificates[0]
-		signed := android.PathForModuleOut(ctx, "signed", apkFilename)
-		SignAppPackage(ctx, signed, dexOutput, certificates, nil)
+		signed := android.PathForModuleOut(ctx, "signed", ctx.ModuleName()+".apk")
+		SignAppPackage(ctx, signed, dexOutput, certificates)
 		a.outputFile = signed
 	} else {
-		alignedApk := android.PathForModuleOut(ctx, "zip-aligned", apkFilename)
+		alignedApk := android.PathForModuleOut(ctx, "zip-aligned", ctx.ModuleName()+".apk")
 		TransformZipAlign(ctx, alignedApk, dexOutput)
 		a.outputFile = alignedApk
 		a.certificate = presignedCertificate
@@ -1354,9 +1133,8 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 
 	// TODO: Optionally compress the output apk.
 
-	if a.IsForPlatform() {
-		a.installPath = ctx.InstallFile(installDir, apkFilename, a.outputFile)
-	}
+	a.installPath = ctx.InstallFile(installDir,
+		proptools.StringDefault(a.properties.Filename, a.BaseModuleName()+".apk"), a.outputFile)
 
 	// TODO: androidmk converter jni libs
 }
@@ -1407,21 +1185,6 @@ func (a *AndroidAppImport) Privileged() bool {
 	return Bool(a.properties.Privileged)
 }
 
-func (a *AndroidAppImport) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Module) bool {
-	// android_app_import might have extra dependencies via uses_libs property.
-	// Don't track the dependency as we don't automatically add those libraries
-	// to the classpath. It should be explicitly added to java_libs property of APEX
-	return false
-}
-
-func (a *AndroidAppImport) sdkVersion() sdkSpec {
-	return sdkSpecFrom("")
-}
-
-func (a *AndroidAppImport) minSdkVersion() sdkSpec {
-	return sdkSpecFrom("")
-}
-
 func createVariantGroupType(variants []string, variantGroupName string) reflect.Type {
 	props := reflect.TypeOf((*AndroidAppImportProperties)(nil))
 
@@ -1468,7 +1231,6 @@ func AndroidAppImportFactory() android.Module {
 		module.processVariants(ctx)
 	})
 
-	android.InitApexModule(module)
 	InitJavaModule(module, android.DeviceSupported)
 	android.InitSingleSourcePrebuiltModule(module, &module.properties, "Apk")
 
@@ -1506,11 +1268,7 @@ func AndroidTestImportFactory() android.Module {
 		module.processVariants(ctx)
 	})
 
-	module.dexpreopter.isTest = true
-
-	android.InitApexModule(module)
-	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
-	android.InitDefaultableModule(module)
+	InitJavaModule(module, android.DeviceSupported)
 	android.InitSingleSourcePrebuiltModule(module, &module.properties, "Apk")
 
 	return module
@@ -1519,11 +1277,9 @@ func AndroidTestImportFactory() android.Module {
 type RuntimeResourceOverlay struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
-	android.OverridableModuleBase
 	aapt
 
-	properties            RuntimeResourceOverlayProperties
-	overridableProperties OverridableRuntimeResourceOverlayProperties
+	properties RuntimeResourceOverlayProperties
 
 	certificate Certificate
 
@@ -1547,28 +1303,6 @@ type RuntimeResourceOverlayProperties struct {
 	// if not blank, set the minimum version of the sdk that the compiled artifacts will run against.
 	// Defaults to sdk_version if not set.
 	Min_sdk_version *string
-
-	// list of android_library modules whose resources are extracted and linked against statically
-	Static_libs []string
-
-	// list of android_app modules whose resources are extracted and linked against
-	Resource_libs []string
-
-	// Names of modules to be overridden. Listed modules can only be other overlays
-	// (in Make or Soong).
-	// This does not completely prevent installation of the overridden overlays, but if both
-	// overlays would be installed by default (in PRODUCT_PACKAGES) the other overlay will be removed
-	// from PRODUCT_PACKAGES.
-	Overrides []string
-}
-
-// RuntimeResourceOverlayModule interface is used by the apex package to gather information from
-// a RuntimeResourceOverlay module.
-type RuntimeResourceOverlayModule interface {
-	android.Module
-	OutputFile() android.Path
-	Certificate() Certificate
-	Theme() string
 }
 
 func (r *RuntimeResourceOverlay) DepsMutator(ctx android.BottomUpMutatorContext) {
@@ -1581,36 +1315,19 @@ func (r *RuntimeResourceOverlay) DepsMutator(ctx android.BottomUpMutatorContext)
 	if cert != "" {
 		ctx.AddDependency(ctx.Module(), certificateTag, cert)
 	}
-
-	ctx.AddVariationDependencies(nil, staticLibTag, r.properties.Static_libs...)
-	ctx.AddVariationDependencies(nil, libTag, r.properties.Resource_libs...)
 }
 
 func (r *RuntimeResourceOverlay) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	// Compile and link resources
 	r.aapt.hasNoCode = true
 	// Do not remove resources without default values nor dedupe resource configurations with the same value
-	aaptLinkFlags := []string{"--no-resource-deduping", "--no-resource-removal"}
-	// Allow the override of "package name" and "overlay target package name"
-	manifestPackageName, overridden := ctx.DeviceConfig().OverrideManifestPackageNameFor(ctx.ModuleName())
-	if overridden || r.overridableProperties.Package_name != nil {
-		// The product override variable has a priority over the package_name property.
-		if !overridden {
-			manifestPackageName = *r.overridableProperties.Package_name
-		}
-		aaptLinkFlags = append(aaptLinkFlags, "--rename-manifest-package "+manifestPackageName)
-	}
-	if r.overridableProperties.Target_package_name != nil {
-		aaptLinkFlags = append(aaptLinkFlags,
-			"--rename-overlay-target-package "+*r.overridableProperties.Target_package_name)
-	}
-	r.aapt.buildActions(ctx, r, aaptLinkFlags...)
+	r.aapt.buildActions(ctx, r, "--no-resource-deduping", "--no-resource-removal")
 
 	// Sign the built package
-	_, certificates := collectAppDeps(ctx, r, false, false)
+	_, certificates := collectAppDeps(ctx, false, false)
 	certificates = processMainCert(r.ModuleBase, String(r.properties.Certificate), certificates, ctx)
 	signed := android.PathForModuleOut(ctx, "signed", r.Name()+".apk")
-	SignAppPackage(ctx, signed, r.aapt.exportPackage, certificates, nil)
+	SignAppPackage(ctx, signed, r.aapt.exportPackage, certificates)
 	r.certificate = certificates[0]
 
 	r.outputFile = signed
@@ -1637,30 +1354,16 @@ func (r *RuntimeResourceOverlay) targetSdkVersion() sdkSpec {
 	return r.sdkVersion()
 }
 
-func (r *RuntimeResourceOverlay) Certificate() Certificate {
-	return r.certificate
-}
-
-func (r *RuntimeResourceOverlay) OutputFile() android.Path {
-	return r.outputFile
-}
-
-func (r *RuntimeResourceOverlay) Theme() string {
-	return String(r.properties.Theme)
-}
-
 // runtime_resource_overlay generates a resource-only apk file that can overlay application and
 // system resources at run time.
 func RuntimeResourceOverlayFactory() android.Module {
 	module := &RuntimeResourceOverlay{}
 	module.AddProperties(
 		&module.properties,
-		&module.aaptProperties,
-		&module.overridableProperties)
+		&module.aaptProperties)
 
-	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
-	android.InitDefaultableModule(module)
-	android.InitOverridableModule(module, &module.properties.Overrides)
+	InitJavaModule(module, android.DeviceSupported)
+
 	return module
 }
 

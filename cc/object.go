@@ -26,16 +26,6 @@ import (
 
 func init() {
 	android.RegisterModuleType("cc_object", ObjectFactory)
-	android.RegisterSdkMemberType(ccObjectSdkMemberType)
-}
-
-var ccObjectSdkMemberType = &librarySdkMemberType{
-	SdkMemberTypeBase: android.SdkMemberTypeBase{
-		PropertyName: "native_objects",
-		SupportsSdk:  true,
-	},
-	prebuiltModuleType: "cc_prebuilt_object",
-	linkTypes:          nil,
 }
 
 type objectLinker struct {
@@ -57,18 +47,12 @@ type ObjectLinkerProperties struct {
 	Linker_script *string `android:"path,arch_variant"`
 }
 
-func newObject() *Module {
-	module := newBaseModule(android.HostAndDeviceSupported, android.MultilibBoth)
-	module.sanitize = &sanitize{}
-	module.stl = &stl{}
-	return module
-}
-
 // cc_object runs the compiler without running the linker. It is rarely
 // necessary, but sometimes used to generate .s files from .c files to use as
 // input to a cc_genrule module.
 func ObjectFactory() android.Module {
-	module := newObject()
+	module := newBaseModule(android.HostAndDeviceSupported, android.MultilibBoth)
+	module.sanitize = &sanitize{}
 	module.linker = &objectLinker{
 		baseLinker: NewBaseLinker(module.sanitize),
 	}
@@ -77,7 +61,7 @@ func ObjectFactory() android.Module {
 	// Clang's address-significance tables are incompatible with ld -r.
 	module.compiler.appendCflags([]string{"-fno-addrsig"})
 
-	module.sdkMemberTypes = []android.SdkMemberType{ccObjectSdkMemberType}
+	module.stl = &stl{}
 	return module.Init()
 }
 

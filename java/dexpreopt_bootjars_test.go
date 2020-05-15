@@ -48,12 +48,12 @@ func TestDexpreoptBootJars(t *testing.T) {
 
 	pathCtx := android.PathContextForTesting(config)
 	dexpreoptConfig := dexpreopt.GlobalConfigForTests(pathCtx)
-	dexpreoptConfig.BootJars = []string{"platform:foo", "platform:bar", "platform:baz"}
+	dexpreoptConfig.BootJars = []string{"foo", "bar", "baz"}
 	dexpreopt.SetTestGlobalConfig(config, dexpreoptConfig)
 
 	ctx := testContext()
 
-	RegisterDexpreoptBootJarsComponents(ctx)
+	ctx.RegisterSingletonType("dex_bootjars", dexpreoptBootJarsFactory)
 
 	run(t, ctx, config)
 

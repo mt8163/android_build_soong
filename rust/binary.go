@@ -35,10 +35,9 @@ type BinaryCompilerProperties struct {
 type binaryDecorator struct {
 	*baseCompiler
 
-	Properties            BinaryCompilerProperties
-	distFile              android.OptionalPath
-	coverageOutputZipFile android.OptionalPath
-	unstrippedOutputFile  android.Path
+	Properties           BinaryCompilerProperties
+	distFile             android.OptionalPath
+	unstrippedOutputFile android.Path
 }
 
 var _ compiler = (*binaryDecorator)(nil)
@@ -105,10 +104,6 @@ func (binary *binaryDecorator) compilerProps() []interface{} {
 		&binary.Properties)
 }
 
-func (binary *binaryDecorator) nativeCoverage() bool {
-	return true
-}
-
 func (binary *binaryDecorator) compile(ctx ModuleContext, flags Flags, deps PathDeps) android.Path {
 	fileName := binary.getStem(ctx) + ctx.toolchain().ExecutableSuffix()
 
@@ -119,21 +114,7 @@ func (binary *binaryDecorator) compile(ctx ModuleContext, flags Flags, deps Path
 
 	flags.RustFlags = append(flags.RustFlags, deps.depFlags...)
 
-	outputs := TransformSrcToBinary(ctx, srcPath, deps, flags, outputFile, deps.linkDirs)
-	binary.coverageFile = outputs.coverageFile
-
-	var coverageFiles android.Paths
-	if outputs.coverageFile != nil {
-		coverageFiles = append(coverageFiles, binary.coverageFile)
-	}
-	if len(deps.coverageFiles) > 0 {
-		coverageFiles = append(coverageFiles, deps.coverageFiles...)
-	}
-	binary.coverageOutputZipFile = TransformCoverageFilesToZip(ctx, coverageFiles, binary.getStem(ctx))
+	TransformSrcToBinary(ctx, srcPath, deps, flags, outputFile, deps.linkDirs)
 
 	return outputFile
-}
-
-func (binary *binaryDecorator) coverageOutputZipPath() android.OptionalPath {
-	return binary.coverageOutputZipFile
 }

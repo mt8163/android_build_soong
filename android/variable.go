@@ -51,14 +51,6 @@ type variableProperties struct {
 			Exclude_static_libs []string `android:"arch_variant"`
 		} `android:"arch_variant"`
 
-		Malloc_zero_contents struct {
-			Cflags []string `android:"arch_variant"`
-		} `android:"arch_variant"`
-
-		Malloc_pattern_fill_contents struct {
-			Cflags []string `android:"arch_variant"`
-		} `android:"arch_variant"`
-
 		Safestack struct {
 			Cflags []string `android:"arch_variant"`
 		} `android:"arch_variant"`
@@ -104,9 +96,6 @@ type variableProperties struct {
 			}
 			Sanitize struct {
 				Address *bool
-			}
-			Optimize struct {
-				Enabled *bool
 			}
 		}
 
@@ -164,6 +153,7 @@ type productVariables struct {
 	Platform_sdk_codename                     *string  `json:",omitempty"`
 	Platform_sdk_final                        *bool    `json:",omitempty"`
 	Platform_version_active_codenames         []string `json:",omitempty"`
+	Platform_version_future_codenames         []string `json:",omitempty"`
 	Platform_vndk_version                     *string  `json:",omitempty"`
 	Platform_systemsdk_versions               []string `json:",omitempty"`
 	Platform_security_patch                   *string  `json:",omitempty"`
@@ -203,11 +193,9 @@ type productVariables struct {
 	CrossHostArch          *string `json:",omitempty"`
 	CrossHostSecondaryArch *string `json:",omitempty"`
 
-	DeviceResourceOverlays  []string `json:",omitempty"`
-	ProductResourceOverlays []string `json:",omitempty"`
-	EnforceRROTargets       []string `json:",omitempty"`
-	// TODO(b/150820813) Some modules depend on static overlay, remove this after eliminating the dependency.
-	EnforceRROExemptedTargets  []string `json:",omitempty"`
+	DeviceResourceOverlays     []string `json:",omitempty"`
+	ProductResourceOverlays    []string `json:",omitempty"`
+	EnforceRROTargets          []string `json:",omitempty"`
 	EnforceRROExcludedOverlays []string `json:",omitempty"`
 
 	AAPTCharacteristics *string  `json:",omitempty"`
@@ -223,8 +211,6 @@ type productVariables struct {
 	Unbundled_build                  *bool `json:",omitempty"`
 	Unbundled_build_sdks_from_source *bool `json:",omitempty"`
 	Malloc_not_svelte                *bool `json:",omitempty"`
-	Malloc_zero_contents             *bool `json:",omitempty"`
-	Malloc_pattern_fill_contents     *bool `json:",omitempty"`
 	Safestack                        *bool `json:",omitempty"`
 	HostStaticBinaries               *bool `json:",omitempty"`
 	Binder32bit                      *bool `json:",omitempty"`
@@ -268,8 +254,6 @@ type productVariables struct {
 
 	ClangTidy  *bool   `json:",omitempty"`
 	TidyChecks *string `json:",omitempty"`
-
-	SamplingPGO *bool `json:",omitempty"`
 
 	NativeLineCoverage   *bool    `json:",omitempty"`
 	Native_coverage      *bool    `json:",omitempty"`
@@ -375,6 +359,7 @@ func (v *productVariables) SetDefaultConfig() {
 		Platform_sdk_codename:             stringPtr("Q"),
 		Platform_sdk_final:                boolPtr(false),
 		Platform_version_active_codenames: []string{"Q"},
+		Platform_version_future_codenames: []string{"Q"},
 		Platform_vndk_version:             stringPtr("Q"),
 
 		HostArch:                   stringPtr("x86_64"),
@@ -394,10 +379,8 @@ func (v *productVariables) SetDefaultConfig() {
 		AAPTCharacteristics: stringPtr("nosdcard"),
 		AAPTPrebuiltDPI:     []string{"xhdpi", "xxhdpi"},
 
-		Malloc_not_svelte:            boolPtr(true),
-		Malloc_zero_contents:         boolPtr(false),
-		Malloc_pattern_fill_contents: boolPtr(false),
-		Safestack:                    boolPtr(false),
+		Malloc_not_svelte: boolPtr(true),
+		Safestack:         boolPtr(false),
 	}
 
 	if runtime.GOOS == "linux" {

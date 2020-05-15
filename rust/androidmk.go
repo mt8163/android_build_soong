@@ -46,12 +46,6 @@ func (mod *Module) subAndroidMk(data *android.AndroidMkData, obj interface{}) {
 }
 
 func (mod *Module) AndroidMk() android.AndroidMkData {
-	if mod.Properties.HideFromMake {
-		return android.AndroidMkData{
-			Disabled: true,
-		}
-	}
-
 	ret := android.AndroidMkData{
 		OutputFile: mod.outputFile,
 		Include:    "$(BUILD_SYSTEM)/soong_rust_prebuilt.mk",
@@ -90,9 +84,6 @@ func (binary *binaryDecorator) AndroidMk(ctx AndroidMkContext, ret *android.Andr
 	ret.DistFile = binary.distFile
 	ret.Extra = append(ret.Extra, func(w io.Writer, outputFile android.Path) {
 		fmt.Fprintln(w, "LOCAL_SOONG_UNSTRIPPED_BINARY :=", binary.unstrippedOutputFile.String())
-		if binary.coverageOutputZipFile.Valid() {
-			fmt.Fprintln(w, "LOCAL_PREBUILT_COVERAGE_ARCHIVE := "+binary.coverageOutputZipFile.String())
-		}
 	})
 }
 
@@ -133,10 +124,6 @@ func (library *libraryDecorator) AndroidMk(ctx AndroidMkContext, ret *android.An
 		if !library.rlib() {
 			fmt.Fprintln(w, "LOCAL_SOONG_UNSTRIPPED_BINARY :=", library.unstrippedOutputFile.String())
 		}
-		if library.coverageOutputZipFile.Valid() {
-			fmt.Fprintln(w, "LOCAL_PREBUILT_COVERAGE_ARCHIVE := "+library.coverageOutputZipFile.String())
-		}
-
 	})
 }
 
