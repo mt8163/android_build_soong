@@ -77,6 +77,7 @@ var Configuration = map[string]PathConfig{
 	"bash":    Allowed,
 	"dd":      Allowed,
 	"diff":    Allowed,
+	"brotli":  Allowed,
 	"dlv":     Allowed,
 	"expr":    Allowed,
 	"fuser":   Allowed,
